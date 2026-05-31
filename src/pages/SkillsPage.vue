@@ -1,8 +1,21 @@
 <template>
   <div>
-    <div class="mb-6">
-      <h1 class="text-2xl font-bold mb-1" style="color: #201b34;">技能管理</h1>
-      <p class="text-sm" style="color: #6f6883;">已接受的技能候選項，將同步至 .codex/skills 與 .claude/commands</p>
+    <div class="mb-6 flex items-start justify-between gap-3">
+      <div>
+        <h1 class="text-2xl font-bold mb-1" style="color: #201b34;">技能管理</h1>
+        <p class="text-sm" style="color: #6f6883;">已接受的技能候選項，將同步至 .codex/skills 與 .claude/commands</p>
+      </div>
+      <div class="text-right">
+        <button @click="rebuildIndex" :disabled="!selectedProjectId || rebuilding"
+                class="px-3 py-1.5 rounded-xl text-xs font-bold disabled:opacity-50"
+                style="background: #eee8ff; color: #5037c9;"
+                title="依現有技能重寫 CLAUDE.md / AGENTS.md 的技能索引">
+          {{ rebuilding ? '重建中…' : '🔄 重建技能索引' }}
+        </button>
+        <div v-if="rebuildMsg" class="text-xs mt-1" :style="rebuildMsg.startsWith('✅') ? 'color:#1d7a51' : 'color:#d85c5c'">
+          {{ rebuildMsg }}
+        </div>
+      </div>
     </div>
 
     <div v-if="skills.length === 0"
@@ -42,13 +55,35 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import { useReviewStore } from '../stores/reviewStore'
+import { useProjectStore } from '../stores/projectStore'
+import { api } from '../api/tauriCommands'
 import StatusBadge from '../components/StatusBadge.vue'
 
 const reviewStore = useReviewStore()
+const projectStore = useProjectStore()
 const skills = computed(() =>
   reviewStore.items.filter(i => i.itemType === 'skill')
 )
+
+const selectedProjectId = computed(() => projectStore.selectedProjectId)
+const rebuilding = ref(false)
+const rebuildMsg = ref('')
+
+async function rebuildIndex() {
+  if (!selectedProjectId.value) return
+  rebuilding.value = true
+  rebuildMsg.value = ''
+  try {
+    await api.rebuildSkillIndex(selectedProjectId.value)
+    rebuildMsg.value = '✅ 索引已重建'
+  } catch (e) {
+    rebuildMsg.value = '✗ ' + String(e)
+  } finally {
+    rebuilding.value = false
+    setTimeout(() => (rebuildMsg.value = ''), 4000)
+  }
+}
 </script>
