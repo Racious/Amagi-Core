@@ -160,7 +160,6 @@ export const api = {
 
   syncAgentFiles: (projectId: string) => invoke<SyncResult>('sync_agent_files', { projectId }),
   previewSyncDiff: (projectId: string) => invoke<FileDiffPreview[]>('preview_sync_diff', { projectId }),
-  rebuildSkillIndex: (projectId: string) => invoke<void>('rebuild_skill_index', { projectId }),
 
   // ── Workflow 指令 ──────────────────────────────
   scanProjectWorkflows: (projectId: string) =>

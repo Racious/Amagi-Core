@@ -281,7 +281,7 @@ fn build_initial_agents_md(project_name: &str) -> String {
 
 ## 標準步驟（拆步驟時務必包含這些）
 
-1. **查閱規範**：查 `.claude/commands/` 與本檔下方「可用技能索引」。有對應技能 → 照它做；無 → 按工程判斷。
+1. **確認可用技能**：相關技能會自動載入（原生 Skills，位於 `.claude/skills/`）。有對應技能 → 照它做；無 → 按工程判斷。
 2. **實作功能**。
 3. **驗證**：跑 build / test，確認沒錯。
 4. **建立 skill 草稿**：在 `.amagi/pending/` 建 `skill-<任務類型>.md`，記錄這次的可重複流程（格式見下）。
@@ -341,7 +341,7 @@ fn build_initial_claude_md(project_name: &str) -> String {
 
 ## 標準步驟（拆步驟時務必包含這些）
 
-1. **查閱規範**：查 `.claude/commands/` 與本檔下方「可用技能索引」。有對應技能 → 照它做；無 → 按工程判斷。
+1. **確認可用技能**：相關技能會自動載入（原生 Skills，位於 `.claude/skills/`）。有對應技能 → 照它做；無 → 按工程判斷。
 2. **實作功能**。
 3. **驗證**：跑 build / test，確認沒錯。
 4. **建立 skill 草稿**：在 `.amagi/pending/` 建 `skill-<任務類型>.md`，記錄這次的可重複流程（格式見下）。

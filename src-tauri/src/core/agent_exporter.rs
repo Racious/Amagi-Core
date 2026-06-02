@@ -60,41 +60,46 @@ pub fn sync_agent_files(project_path: &str, accepted: &[ReviewItem]) -> Result<S
     for skill in &skills {
         let slug = fs_utils::slugify(&skill.title);
 
-        let (codex_dir, claude_cmd_dir) = match skill.sync_scope {
+        // codex_dir：Codex 原生技能；claude_skill_dir：Claude 原生技能（自動觸發）
+        let (codex_dir, claude_skill_dir) = match skill.sync_scope {
             SyncScope::Global => {
-                // 全域：~/.codex/skills/<slug>  和  ~/.claude/commands/
+                // 全域：~/.codex/skills/<slug>  和  ~/.claude/skills/<slug>
                 let cd = fs_utils::global_codex_skills_dir()
                     .map(|d| d.join(&slug));
-                let cc = fs_utils::global_claude_commands_dir();
-                (cd, cc)
+                let cs = fs_utils::global_claude_commands_dir()
+                    .and_then(|c| c.parent().map(|p| p.join("skills").join(&slug)));
+                (cd, cs)
             }
             SyncScope::Project => {
-                // 專案層：<project>/.codex/skills/<slug>
+                // 專案層：<project>/.codex/skills/<slug> 和 <project>/.claude/skills/<slug>
                 let cd = Some(Path::new(project_path).join(".codex").join("skills").join(&slug));
-                let cc = Some(Path::new(project_path).join(".claude").join("commands"));
-                (cd, cc)
+                let cs = Some(Path::new(project_path).join(".claude").join("skills").join(&slug));
+                (cd, cs)
             }
         };
+
+        let native = markdown::build_native_skill_md(skill);
 
         // ── .amagi/skills/ 主副本（永遠寫入，不論 scope）────
         let amagi_skills_dir = Path::new(project_path).join(".amagi").join("skills");
         std::fs::create_dir_all(&amagi_skills_dir).map_err(|e| AppError::Io(e.to_string()))?;
         let amagi_path = amagi_skills_dir.join(format!("{}.md", slug));
-        markdown::write_with_backup(&amagi_path, &markdown::build_skill_md(skill))?;
+        markdown::write_with_backup(&amagi_path, &native)?;
         written.push(amagi_path.to_string_lossy().to_string());
 
-        // ── AI 工具目錄（依 scope 決定位置）────────────────
+        // ── Codex 原生技能：.codex/skills/<slug>/SKILL.md ──
         if let Some(dir) = codex_dir {
             std::fs::create_dir_all(&dir).map_err(|e| AppError::Io(e.to_string()))?;
             let path = dir.join("SKILL.md");
-            markdown::write_with_backup(&path, &markdown::build_skill_md(skill))?;
+            markdown::write_with_backup(&path, &native)?;
             written.push(path.to_string_lossy().to_string());
         }
 
-        if let Some(dir) = claude_cmd_dir {
+        // ── Claude 原生技能：.claude/skills/<slug>/SKILL.md（描述自動觸發）──
+        if let Some(dir) = claude_skill_dir {
             std::fs::create_dir_all(&dir).map_err(|e| AppError::Io(e.to_string()))?;
-            let path = dir.join(format!("{}.md", slug));
-            markdown::write_with_backup(&path, &markdown::build_claude_command_md(skill))?;
+            let path = dir.join("SKILL.md");
+            markdown::write_with_backup(&path, &native)?;
             written.push(path.to_string_lossy().to_string());
         }
     }
@@ -128,15 +133,15 @@ pub fn preview_sync_diff(project_path: &str, accepted: &[ReviewItem]) -> Vec<Fil
 
     for skill in accepted.iter().filter(|i| i.item_type == ReviewItemType::Skill) {
         let slug = fs_utils::slugify(&skill.title);
-        let codex_path = Path::new(project_path)
-            .join(".codex").join("skills").join(&slug).join("SKILL.md");
-        let new_content = markdown::build_skill_md(skill);
-        let current = std::fs::read_to_string(&codex_path).ok();
+        let claude_path = Path::new(project_path)
+            .join(".claude").join("skills").join(&slug).join("SKILL.md");
+        let new_content = markdown::build_native_skill_md(skill);
+        let current = std::fs::read_to_string(&claude_path).ok();
         previews.push(FileDiffPreview {
-            file_path: codex_path.to_string_lossy().to_string(),
+            file_path: claude_path.to_string_lossy().to_string(),
             current_content: current,
             new_content,
-            is_new_file: !codex_path.exists(),
+            is_new_file: !claude_path.exists(),
         });
     }
 

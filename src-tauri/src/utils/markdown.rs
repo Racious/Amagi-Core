@@ -48,16 +48,120 @@ pub fn build_claude_md(items: &[ReviewItem]) -> String {
     lines.join("\n")
 }
 
-pub fn build_skill_md(item: &ReviewItem) -> String {
-    let slug = crate::utils::fs_utils::slugify(&item.title);
-    format!(
-        "---\nname: {}\ndescription: {}\n---\n\n# {}\n\n{}\n",
-        slug, item.title, item.title, item.content
-    )
+/// 產生 Claude / Codex 原生 Skills 格式（.claude/skills/<slug>/SKILL.md）。
+/// frontmatter 帶 description 與 when_to_use，讓 Claude 原生自動觸發。
+pub fn build_native_skill_md(item: &ReviewItem) -> String {
+    let when_to_use = section_all_lines(&item.content, "何時使用");
+    let desc_line = section_first_line(&item.content, "描述");
+
+    // description：標題 + 描述首行（含觸發語意），供 Claude 判斷何時套用
+    let description = match desc_line {
+        Some(d) => format!("{}。{}", item.title, d),
+        None => item.title.clone(),
+    };
+
+    let mut fm = String::from("---\n");
+    fm.push_str(&format!("name: \"{}\"\n", yaml_escape(&item.title)));
+    fm.push_str(&format!("description: \"{}\"\n", yaml_escape(&description)));
+    if let Some(w) = when_to_use {
+        fm.push_str(&format!("when_to_use: \"{}\"\n", yaml_escape(&w)));
+    }
+    fm.push_str("---\n\n");
+
+    format!("{}# {}\n\n{}\n", fm, item.title, item.content)
 }
 
-pub fn build_claude_command_md(item: &ReviewItem) -> String {
-    format!("# {}\n\n{}\n", item.title, item.content)
+/// 取某個 `## 段落` 的第一行非空內容（去掉清單符號）
+fn section_first_line(content: &str, section: &str) -> Option<String> {
+    let header = format!("## {}", section);
+    let mut in_section = false;
+    for line in content.lines() {
+        let t = line.trim();
+        if t.starts_with("## ") {
+            in_section = t == header;
+            continue;
+        }
+        if in_section && !t.is_empty() {
+            let cleaned = t.trim_start_matches(['-', '*', ' ']).trim();
+            if !cleaned.is_empty() {
+                return Some(cleaned.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// 取某個 `## 段落` 的所有非空行（去清單符號），用「；」串成一行
+fn section_all_lines(content: &str, section: &str) -> Option<String> {
+    let header = format!("## {}", section);
+    let mut in_section = false;
+    let mut parts: Vec<String> = Vec::new();
+    for line in content.lines() {
+        let t = line.trim();
+        if t.starts_with("## ") {
+            if in_section { break; }
+            in_section = t == header;
+            continue;
+        }
+        if in_section && !t.is_empty() {
+            let cleaned = t.trim_start_matches(['-', '*', ' ']).trim();
+            if !cleaned.is_empty() {
+                parts.push(cleaned.to_string());
+            }
+        }
+    }
+    if parts.is_empty() { None } else { Some(parts.join("；")) }
+}
+
+/// YAML 雙引號字串轉義
+fn yaml_escape(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::review::*;
+    use chrono::Utc;
+
+    fn skill_item(title: &str, content: &str) -> ReviewItem {
+        ReviewItem {
+            id: "t".into(),
+            project_id: "p".into(),
+            item_type: ReviewItemType::Skill,
+            category: "skill".into(),
+            title: title.into(),
+            content: content.into(),
+            risk: RiskLevel::Low,
+            status: ReviewStatus::Accepted,
+            sync_targets: vec![],
+            sync_scope: SyncScope::Project,
+            source_pending_file: None,
+            created_at: Utc::now(),
+            reviewed_at: None,
+        }
+    }
+
+    #[test]
+    fn test_native_skill_frontmatter() {
+        let content = "## 描述\n做計算模組\n\n## 何時使用\n- 計算機\n- 觸發關鍵字：四則運算\n\n## 步驟\n1. 做";
+        let out = build_native_skill_md(&skill_item("計算模組", content));
+        assert!(out.starts_with("---\n"));
+        assert!(out.contains("name: \"計算模組\""));
+        assert!(out.contains("description: \"計算模組。做計算模組\""));
+        // when_to_use 應含兩行串接
+        assert!(out.contains("計算機；觸發關鍵字：四則運算"));
+        // 內文保留
+        assert!(out.contains("## 步驟"));
+    }
+
+    #[test]
+    fn test_native_skill_no_sections() {
+        let out = build_native_skill_md(&skill_item("純文字技能", "這只是一段說明"));
+        assert!(out.contains("name: \"純文字技能\""));
+        assert!(out.contains("description: \"純文字技能\""));
+        assert!(!out.contains("when_to_use:")); // 無何時使用段落
+    }
 }
 
 pub fn write_with_backup(path: &std::path::Path, content: &str) -> Result<(), crate::AppError> {

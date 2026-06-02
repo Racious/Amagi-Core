@@ -2,7 +2,7 @@ use tauri::State;
 use crate::{AppError, AppState};
 use crate::models::sync::{SyncResult, FileDiffPreview};
 use crate::models::review::ReviewStatus;
-use crate::core::{project_manager, review_queue, agent_exporter, skill_index};
+use crate::core::{project_manager, review_queue, agent_exporter};
 
 #[tauri::command]
 pub async fn sync_agent_files(
@@ -39,9 +39,6 @@ pub async fn sync_agent_files(
         }
     }
 
-    // ── 重建技能索引並注入 CLAUDE.md / AGENTS.md ──────
-    skill_index::refresh_skill_index(&project.path)?;
-
     Ok(result)
 }
 
@@ -60,16 +57,4 @@ pub async fn preview_sync_diff(
         .collect();
 
     Ok(agent_exporter::preview_sync_diff(&project.path, &accepted))
-}
-
-/// 重建技能索引：依 .amagi/skills/ 現有技能，重寫 CLAUDE.md / AGENTS.md 的索引區塊
-#[tauri::command]
-pub async fn rebuild_skill_index(
-    project_id: String,
-    state: State<'_, AppState>,
-) -> Result<(), AppError> {
-    let data_dir = state.data_dir.clone();
-    let project = project_manager::get_project(&project_id, &data_dir)
-        .ok_or_else(|| AppError::ProjectNotFound(project_id.clone()))?;
-    skill_index::refresh_skill_index(&project.path)
 }

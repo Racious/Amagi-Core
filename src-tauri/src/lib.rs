@@ -77,7 +77,6 @@ pub fn run() {
             update_review_item,
             sync_agent_files,
             preview_sync_diff,
-            rebuild_skill_index,
             scan_project_workflows,
             list_all_workflows,
             generate_workflow_command,

@@ -7,5 +7,4 @@ pub mod review_queue;
 pub mod agent_exporter;
 pub mod workflow_manager;
 pub mod bridge_engine;
-pub mod skill_index;
 pub mod tray;
