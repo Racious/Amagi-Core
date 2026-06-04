@@ -6,6 +6,9 @@ mod core;
 mod models;
 mod utils;
 
+#[cfg(test)]
+mod e2e_test;
+
 use commands::project_commands::*;
 use commands::scan_commands::*;
 use commands::learn_commands::*;
