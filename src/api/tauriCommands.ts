@@ -60,10 +60,17 @@ export interface ReviewApplyResult {
   writtenFiles: string[]
 }
 
+export interface ItemConflict {
+  itemId: string
+  itemTitle: string
+  reasons: string[]
+}
+
 export interface SyncResult {
   projectId: string
   writtenFiles: string[]
   skippedFiles: string[]
+  blockedConflicts: ItemConflict[]
 }
 
 export interface FileDiffPreview {
@@ -158,7 +165,7 @@ export const api = {
   ignoreReviewItems: (ids: string[]) => invoke<void>('ignore_review_items', { ids }),
   updateReviewItem: (item: ReviewItem) => invoke<ReviewItem>('update_review_item', { item }),
 
-  syncAgentFiles: (projectId: string) => invoke<SyncResult>('sync_agent_files', { projectId }),
+  syncAgentFiles: (projectId: string, force = false) => invoke<SyncResult>('sync_agent_files', { projectId, force }),
   previewSyncDiff: (projectId: string) => invoke<FileDiffPreview[]>('preview_sync_diff', { projectId }),
 
   // ── Workflow 指令 ──────────────────────────────

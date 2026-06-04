@@ -108,6 +108,7 @@ pub fn sync_agent_files(project_path: &str, accepted: &[ReviewItem]) -> Result<S
         project_id: String::new(),
         written_files: written,
         skipped_files: Vec::new(),
+        blocked_conflicts: Vec::new(),
     })
 }
 

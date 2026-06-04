@@ -1,4 +1,5 @@
 pub mod safety_filter;
+pub mod conflict_filter;
 pub mod git_scanner;
 pub mod project_manager;
 pub mod learn_engine;
