@@ -2,27 +2,24 @@
   <div>
     <div class="flex items-center justify-between mb-6">
       <div>
-        <h1 class="text-2xl font-bold mb-1" style="color: #201b34;">審核佇列</h1>
-        <p class="text-sm" style="color: #6f6883;">接受、忽略或編輯候選記憶與技能</p>
+        <h1 class="page-title mb-1">審核佇列</h1>
+        <p class="page-sub">接受、忽略或編輯候選記憶與技能</p>
       </div>
       <div class="flex gap-2">
         <button @click="acceptAll" :disabled="pendingItems.length === 0 || reviewStore.loading"
-                class="px-3 py-1.5 rounded-xl text-xs font-bold text-white disabled:opacity-50"
-                style="background: #3cae78;">全部接受</button>
+                class="btn btn-primary btn-sm">全部接受</button>
         <button @click="ignoreAll" :disabled="pendingItems.length === 0 || reviewStore.loading"
-                class="px-3 py-1.5 rounded-xl text-xs font-bold disabled:opacity-50"
-                style="background: #fff0f0; color: #d85c5c;">全部忽略</button>
+                class="btn btn-danger btn-sm">全部忽略</button>
       </div>
     </div>
 
-    <div v-if="reviewStore.loading" class="text-center py-8" style="color: #6f6883;">載入中…</div>
+    <div v-if="reviewStore.loading" class="text-center py-8 text-muted">載入中…</div>
 
     <div v-else-if="pendingItems.length === 0"
-         class="rounded-2xl p-8 text-center border"
-         style="background: white; border-color: #ded6f5; border-style: dashed;">
+         class="card card-dashed p-8 text-center">
       <div class="text-4xl mb-3">✅</div>
-      <div class="font-bold mb-1" style="color: #2e2a3f;">沒有待審核的候選項</div>
-      <div class="text-sm" style="color: #6f6883;">前往「學習變更」頁面掃描專案以產生候選記憶。</div>
+      <div class="font-bold mb-1 text-fg">沒有待審核的候選項</div>
+      <div class="text-sm text-muted">前往「學習變更」頁面掃描專案以產生候選記憶。</div>
     </div>
 
     <div v-else class="space-y-3">
@@ -40,15 +37,14 @@
     <!-- 已接受待同步 -->
     <div v-if="acceptedItems.length > 0" class="mt-8">
       <div class="flex items-center gap-2 mb-3">
-        <div class="text-xs font-bold uppercase tracking-wider" style="color: #1a6fc4;">待同步（{{ acceptedItems.length }}）</div>
-        <RouterLink to="/sync" class="text-xs px-2 py-0.5 rounded-lg font-medium text-white" style="background: #1a6fc4;">前往同步 →</RouterLink>
+        <div class="text-xs font-bold uppercase tracking-wider" style="color: var(--c-info)">待同步（{{ acceptedItems.length }}）</div>
+        <RouterLink to="/sync" class="pill tone-info font-medium">前往同步 →</RouterLink>
       </div>
       <div class="space-y-2">
         <div v-for="item in acceptedItems" :key="item.id"
-             class="rounded-xl p-3 border flex items-center gap-3"
-             style="background: #f0f7ff; border-color: #c8e0ff;">
+             class="card p-3 flex items-center gap-3">
           <span class="text-sm">🔄</span>
-          <span class="text-sm flex-1 truncate" style="color: #2e2a3f;">{{ item.title }}</span>
+          <span class="text-sm flex-1 truncate text-fg">{{ item.title }}</span>
           <StatusBadge :status="item.status" />
         </div>
       </div>
@@ -56,13 +52,12 @@
 
     <!-- 已同步 / 已忽略 -->
     <div v-if="doneItems.length > 0" class="mt-6">
-      <div class="text-xs font-bold uppercase tracking-wider mb-3" style="color: #6f6883;">已完成（{{ doneItems.length }}）</div>
+      <div class="text-xs font-bold uppercase tracking-wider mb-3 text-muted">已完成（{{ doneItems.length }}）</div>
       <div class="space-y-2">
         <div v-for="item in doneItems" :key="item.id"
-             class="rounded-xl p-3 border flex items-center gap-3 opacity-60"
-             style="background: white; border-color: #ded6f5;">
+             class="card p-3 flex items-center gap-3 opacity-60">
           <span class="text-sm">{{ item.status === 'synced' ? '✅' : '🚫' }}</span>
-          <span class="text-sm flex-1 truncate" style="color: #6f6883;">{{ item.title }}</span>
+          <span class="text-sm flex-1 truncate text-muted">{{ item.title }}</span>
           <StatusBadge :status="item.status" />
         </div>
       </div>

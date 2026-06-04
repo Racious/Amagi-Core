@@ -1,33 +1,51 @@
 <template>
   <div>
     <div class="mb-6">
-      <h1 class="text-2xl font-bold mb-1" style="color: #201b34;">設定</h1>
-      <p class="text-sm" style="color: #6f6883;">調整 AMAGI Core 的通知模式與行為</p>
+      <h1 class="page-title mb-1">設定</h1>
+      <p class="page-sub">調整 AMAGI Core 的外觀、通知模式與行為</p>
     </div>
 
-    <div class="rounded-2xl p-5 border mb-4" style="background: white; border-color: #ded6f5;">
-      <div class="font-bold mb-3" style="color: #2e2a3f;">通知模式</div>
+    <!-- 外觀 -->
+    <div class="card p-5 mb-4">
+      <div class="font-semibold text-sm mb-3 text-fg">外觀主題</div>
+      <div class="grid grid-cols-2 gap-2">
+        <button
+          v-for="opt in themeOptions" :key="opt.value"
+          class="flex items-center gap-3 p-3 rounded-lg border text-left transition-colors"
+          :class="theme === opt.value ? 'border-accent' : 'border-border'"
+          :style="theme === opt.value ? 'background: var(--c-accent-soft);' : 'background: var(--c-surface-2);'"
+          @click="set(opt.value)"
+        >
+          <span class="text-lg">{{ opt.icon }}</span>
+          <span class="text-sm font-medium text-fg">{{ opt.label }}</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- 通知模式 -->
+    <div class="card p-5 mb-4">
+      <div class="font-semibold text-sm mb-3 text-fg">通知模式</div>
       <div class="space-y-2">
         <label v-for="mode in modes" :key="mode.value"
-               class="flex items-start gap-3 p-3 rounded-xl cursor-pointer border transition-colors"
-               :style="settingsStore.notificationMode === mode.value
-                 ? 'background: #eee8ff; border-color: #7c5cff;'
-                 : 'background: #f9f7ff; border-color: #ded6f5;'">
+               class="flex items-start gap-3 p-3 rounded-lg cursor-pointer border transition-colors"
+               :class="settingsStore.notificationMode === mode.value ? 'border-accent' : 'border-border'"
+               :style="settingsStore.notificationMode === mode.value ? 'background: var(--c-accent-soft);' : 'background: var(--c-surface-2);'">
           <input type="radio" :value="mode.value" v-model="settingsStore.notificationMode" class="mt-0.5" />
           <div>
-            <div class="text-sm font-bold" style="color: #2e2a3f;">{{ mode.label }}</div>
-            <div class="text-xs mt-0.5" style="color: #6f6883;">{{ mode.desc }}</div>
+            <div class="text-sm font-medium text-fg">{{ mode.label }}</div>
+            <div class="text-xs mt-0.5 text-muted">{{ mode.desc }}</div>
           </div>
         </label>
       </div>
     </div>
 
-    <div class="rounded-2xl p-5 border" style="background: white; border-color: #ded6f5;">
-      <div class="font-bold mb-2" style="color: #2e2a3f;">關於 AMAGI Core</div>
-      <div class="text-sm" style="color: #6f6883;">
+    <!-- 關於 -->
+    <div class="card p-5">
+      <div class="font-semibold text-sm mb-2 text-fg">關於 AMAGI Core</div>
+      <div class="text-sm text-muted space-y-1">
         <div>版本：0.1.0 MVP</div>
-        <div class="mt-1">技術棧：Tauri 2 + Rust + Vue 3</div>
-        <div class="mt-1">儲存位置：%APPDATA%\AMAGI Core\</div>
+        <div>技術棧：Tauri 2 + Rust + Vue 3</div>
+        <div>儲存位置：%APPDATA%\AMAGI Core\</div>
       </div>
     </div>
   </div>
@@ -35,8 +53,15 @@
 
 <script setup lang="ts">
 import { useSettingsStore } from '../stores/settingsStore'
+import { useTheme, type Theme } from '../composables/useTheme'
 
 const settingsStore = useSettingsStore()
+const { theme, set } = useTheme()
+
+const themeOptions: { value: Theme; label: string; icon: string }[] = [
+  { value: 'light', label: '淺色', icon: '☀️' },
+  { value: 'dark', label: '深色', icon: '🌙' },
+]
 
 const modes = [
   { value: 'quiet', label: '低干擾模式', desc: '只在系統匣顯示待審核數，不立即彈窗。適合日常開發。' },

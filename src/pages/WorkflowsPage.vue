@@ -3,56 +3,54 @@
     <!-- 頁首 -->
     <div class="flex items-center justify-between">
       <div>
-        <h1 class="text-2xl font-bold" style="color: #2e2a3f;">工作流程</h1>
-        <p class="text-sm mt-1" style="color: #6f6883;">AI 輔助開發流程管理器</p>
+        <h1 class="page-title mb-1">工作流程</h1>
+        <p class="page-sub">AI 輔助開發流程管理器</p>
       </div>
       <button
         @click="loadWorkflows"
         :disabled="loading"
-        class="px-4 py-2 rounded-xl text-sm font-medium text-white transition-opacity"
-        style="background: linear-gradient(135deg, #7c5cff, #9b7fff);"
-        :class="loading ? 'opacity-50' : 'hover:opacity-90'"
+        class="btn btn-primary"
+        :class="loading ? 'opacity-50' : ''"
       >
         {{ loading ? '載入中…' : '🔄 重新掃描' }}
       </button>
     </div>
 
     <!-- 錯誤訊息 -->
-    <div v-if="error" class="p-4 rounded-xl border text-sm" style="background:#fff0f0; border-color:#ffb3b3; color:#c0392b;">
+    <div v-if="error" class="alert tone-danger">
       {{ error }}
     </div>
 
     <!-- 無專案提示 -->
     <div v-if="!loading && allProjectWorkflows.length === 0 && !error"
-         class="p-8 rounded-2xl border-2 border-dashed text-center"
-         style="border-color: #ded6f5; color: #6f6883;">
+         class="card card-dashed p-8 text-center text-muted">
       <div class="text-4xl mb-3">🔧</div>
-      <div class="font-medium mb-1">尚未偵測到工作流程</div>
-      <div class="text-sm">請先在專案管理頁加入專案，或在專案根目錄建立 <code class="px-1 rounded" style="background:#eee8ff;">.workflow/workflow.yaml</code></div>
+      <div class="font-medium mb-1 text-fg">尚未偵測到工作流程</div>
+      <div class="text-sm">請先在專案管理頁加入專案，或在專案根目錄建立 <code class="px-1 rounded bg-surface-2 text-fg">.workflow/workflow.yaml</code></div>
     </div>
 
     <!-- 各專案工作流程 -->
     <template v-for="pw in allProjectWorkflows" :key="pw.projectId">
-      <div class="rounded-2xl border shadow-sm overflow-hidden" style="background:white; border-color:#ded6f5;">
+      <div class="card overflow-hidden">
         <!-- 專案標頭 -->
-        <div class="px-5 py-3 flex items-center justify-between border-b" style="background:#f4f0ff; border-color:#ded6f5;">
+        <div class="px-5 py-3 flex items-center justify-between border-b border-border bg-surface-2">
           <div class="flex items-center gap-2">
             <span class="text-base">📁</span>
-            <span class="font-semibold text-sm" style="color:#2e2a3f;">{{ pw.projectName }}</span>
-            <span class="text-xs px-2 py-0.5 rounded-full" style="background:#eee8ff; color:#5037c9;">
+            <span class="font-semibold text-sm text-fg">{{ pw.projectName }}</span>
+            <span class="pill tone-accent">
               {{ pw.workflows.length }} 個流程
             </span>
           </div>
-          <span class="text-xs font-mono truncate max-w-xs" style="color:#9f97b5;">{{ pw.projectPath }}</span>
+          <span class="text-xs font-mono truncate max-w-xs text-subtle">{{ pw.projectPath }}</span>
         </div>
 
         <!-- 無 runner 警告 -->
-        <div v-if="!pw.runnerPath" class="px-5 py-3 text-sm" style="color:#b08a00; background:#fffbea;">
+        <div v-if="!pw.runnerPath" class="alert tone-warning rounded-none border-x-0 border-t-0">
           ⚠️ 未偵測到 <code>workflow-runner.js</code>，指令產生功能將不可用
         </div>
 
         <!-- 工作流程列表 -->
-        <div class="divide-y" style="border-color:#f0ebff;">
+        <div class="divide-y divide-border">
           <div
             v-for="wf in pw.workflows"
             :key="wf.id"
@@ -61,14 +59,12 @@
             <!-- 流程標題列 -->
             <div class="flex items-start justify-between gap-3 mb-3">
               <div>
-                <div class="font-semibold" style="color:#2e2a3f;">{{ wf.name }}</div>
-                <div class="text-sm mt-0.5" style="color:#6f6883;">{{ wf.description }}</div>
+                <div class="font-semibold text-fg">{{ wf.name }}</div>
+                <div class="text-sm mt-0.5 text-muted">{{ wf.description }}</div>
               </div>
               <button
                 @click="selectWorkflow(pw, wf)"
-                class="flex-shrink-0 px-3 py-1.5 rounded-lg text-xs font-medium text-white transition-opacity"
-                style="background: linear-gradient(135deg, #7c5cff, #9b7fff);"
-                :class="'hover:opacity-90'"
+                class="btn btn-primary btn-sm flex-shrink-0"
               >
                 啟動
               </button>
@@ -84,38 +80,32 @@
                 <!-- 連線 + 圓點 -->
                 <div class="flex flex-col items-center flex-shrink-0" style="width:20px;">
                   <div
-                    class="w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold text-white flex-shrink-0"
-                    :style="step.requiresStop
-                      ? 'background: linear-gradient(135deg,#ff6b6b,#ffa94d);'
-                      : 'background: linear-gradient(135deg,#7c5cff,#b197ff);'"
+                    class="w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 bg-surface-2 text-muted"
                   >
                     {{ idx + 1 }}
                   </div>
                   <div
                     v-if="idx < wf.steps.length - 1"
-                    class="w-px flex-1 mt-1"
-                    style="background:#ded6f5; min-height:12px;"
+                    class="w-px flex-1 mt-1 bg-border"
+                    style="min-height:12px;"
                   ></div>
                 </div>
 
                 <!-- 步驟內容 -->
                 <div class="flex-1 pb-1">
                   <div class="flex items-center gap-2 flex-wrap">
-                    <span class="text-sm font-medium" style="color:#2e2a3f;">{{ step.name }}</span>
+                    <span class="text-sm font-medium text-fg">{{ step.name }}</span>
                     <span
                       v-if="step.badge"
-                      class="text-xs px-2 py-0.5 rounded-full font-medium"
-                      :style="step.requiresStop
-                        ? 'background:#ffe8e8; color:#c0392b;'
-                        : 'background:#eee8ff; color:#5037c9;'"
+                      class="pill"
+                      :class="step.requiresStop ? 'tone-danger' : 'tone-accent'"
                     >{{ step.badge }}</span>
                     <span
                       v-if="step.requiresStop"
-                      class="text-xs px-2 py-0.5 rounded-full font-medium"
-                      style="background:#fff3e0; color:#e65100;"
+                      class="pill tone-warning"
                     >⏸ 需人工確認</span>
                   </div>
-                  <div class="text-xs mt-0.5" style="color:#9f97b5;">{{ step.description }}</div>
+                  <div class="text-xs mt-0.5 text-subtle">{{ step.description }}</div>
                 </div>
               </div>
             </div>
@@ -128,57 +118,51 @@
     <Transition name="modal">
       <div
         v-if="selectedWorkflow"
-        class="fixed inset-0 z-50 flex items-center justify-center p-4"
-        style="background: rgba(46,42,63,0.5);"
+        class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50"
         @click.self="closePanel"
       >
-        <div class="w-full max-w-xl rounded-2xl shadow-2xl overflow-hidden" style="background:white;">
+        <div class="card w-full max-w-xl shadow-2xl overflow-hidden">
           <!-- 面板標題 -->
-          <div class="px-6 py-4 border-b flex items-center justify-between" style="border-color:#ded6f5; background:#f4f0ff;">
+          <div class="px-6 py-4 border-b border-border flex items-center justify-between bg-surface-2">
             <div>
-              <div class="font-bold" style="color:#2e2a3f;">{{ selectedWorkflow.wf.name }}</div>
-              <div class="text-xs mt-0.5" style="color:#6f6883;">{{ selectedWorkflow.pw.projectName }}</div>
+              <div class="font-bold text-fg">{{ selectedWorkflow.wf.name }}</div>
+              <div class="text-xs mt-0.5 text-muted">{{ selectedWorkflow.pw.projectName }}</div>
             </div>
-            <button @click="closePanel" class="text-xl leading-none" style="color:#6f6883;">✕</button>
+            <button @click="closePanel" class="text-xl leading-none text-muted">✕</button>
           </div>
 
           <div class="p-6 space-y-5">
             <!-- 輸入欄位 -->
             <div v-if="selectedWorkflow.wf.inputs.length > 0" class="space-y-3">
-              <div class="text-sm font-medium" style="color:#2e2a3f;">流程參數</div>
+              <div class="text-sm font-medium text-fg">流程參數</div>
               <div
                 v-for="inp in selectedWorkflow.wf.inputs"
                 :key="inp.key"
                 class="space-y-1"
               >
-                <label class="text-xs font-medium" style="color:#5037c9;">
+                <label class="text-xs font-medium" style="color: var(--c-accent)">
                   {{ inp.label }}
-                  <span v-if="inp.required" style="color:#c0392b;">*</span>
+                  <span v-if="inp.required" style="color: var(--c-danger)">*</span>
                 </label>
                 <input
                   v-model="inputValues[inp.key]"
                   :placeholder="inp.defaultValue ?? ''"
-                  class="w-full px-3 py-2 rounded-lg border text-sm outline-none transition-colors"
-                  style="border-color:#ded6f5; color:#2e2a3f;"
-                  @focus="(e: FocusEvent) => (e.target as HTMLInputElement).style.borderColor='#7c5cff'"
-                  @blur="(e: FocusEvent) => (e.target as HTMLInputElement).style.borderColor='#ded6f5'"
+                  class="input"
                 />
               </div>
             </div>
-            <div v-else class="text-sm py-2" style="color:#6f6883;">此工作流程不需要額外參數。</div>
+            <div v-else class="text-sm py-2 text-muted">此工作流程不需要額外參數。</div>
 
             <!-- 模式選擇 -->
             <div class="space-y-2">
-              <div class="text-sm font-medium" style="color:#2e2a3f;">執行模式</div>
+              <div class="text-sm font-medium text-fg">執行模式</div>
               <div class="flex gap-2">
                 <button
                   v-for="m in modes"
                   :key="m.value"
                   @click="selectedMode = m.value"
-                  class="flex-1 px-3 py-2 rounded-xl text-xs font-medium border transition-colors"
-                  :style="selectedMode === m.value
-                    ? 'background:#7c5cff; color:white; border-color:#7c5cff;'
-                    : 'background:white; color:#2e2a3f; border-color:#ded6f5;'"
+                  class="btn btn-sm flex-1"
+                  :class="selectedMode === m.value ? 'btn-primary' : 'btn-ghost'"
                 >
                   {{ m.label }}
                 </button>
@@ -187,21 +171,20 @@
 
             <!-- 產生指令 -->
             <div v-if="generatedCommand" class="space-y-2">
-              <div class="text-sm font-medium" style="color:#2e2a3f;">執行指令</div>
+              <div class="text-sm font-medium text-fg">執行指令</div>
               <div class="relative">
                 <pre
-                  class="p-3 rounded-xl text-xs overflow-x-auto"
-                  style="background:#1e1a2e; color:#c9b8ff; font-family: 'Cascadia Code', monospace; white-space:pre-wrap; word-break:break-all;"
+                  class="card bg-surface-2 text-fg p-3 text-xs overflow-x-auto font-mono"
+                  style="white-space:pre-wrap; word-break:break-all;"
                 >{{ generatedCommand }}</pre>
                 <button
                   @click="copyCommand"
-                  class="absolute top-2 right-2 px-2 py-1 rounded-lg text-xs font-medium transition-colors"
-                  style="background:#7c5cff; color:white;"
+                  class="btn btn-primary btn-sm absolute top-2 right-2"
                 >
                   {{ copied ? '✓ 已複製' : '複製' }}
                 </button>
               </div>
-              <p class="text-xs" style="color:#6f6883;">
+              <p class="text-xs text-muted">
                 請在專案目錄下開啟終端機，貼上上方指令後執行。
               </p>
             </div>
@@ -211,16 +194,14 @@
               <button
                 @click="generate"
                 :disabled="generating"
-                class="flex-1 px-4 py-2.5 rounded-xl text-sm font-semibold text-white transition-opacity"
-                style="background: linear-gradient(135deg, #7c5cff, #9b7fff);"
-                :class="generating ? 'opacity-50' : 'hover:opacity-90'"
+                class="btn btn-primary flex-1"
+                :class="generating ? 'opacity-50' : ''"
               >
                 {{ generating ? '產生中…' : '🚀 產生指令' }}
               </button>
               <button
                 @click="closePanel"
-                class="px-4 py-2.5 rounded-xl text-sm font-medium border transition-colors"
-                style="border-color:#ded6f5; color:#6f6883;"
+                class="btn btn-ghost"
               >
                 取消
               </button>

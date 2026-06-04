@@ -1,42 +1,51 @@
 <template>
-  <div class="flex h-screen overflow-hidden" style="background-color: #f7f3ff;">
-    <aside class="w-56 flex-shrink-0 flex flex-col border-r" style="background: rgba(255,255,255,0.92); border-color: #ded6f5;">
-      <div class="p-4 border-b" style="border-color: #ded6f5;">
-        <div class="flex items-center gap-3 p-3 rounded-2xl shadow-sm" style="background: linear-gradient(135deg, #fff, #eee8ff);">
-          <div class="w-10 h-10 rounded-xl flex items-center justify-center text-white font-bold text-sm"
-               style="background: linear-gradient(135deg, #7c5cff, #b197ff);">A</div>
-          <div>
-            <div class="font-bold text-sm" style="color: #2e2a3f;">AMAGI Core</div>
-            <div class="text-xs" style="color: #6f6883;">記憶與技能同步器</div>
-          </div>
+  <div class="flex h-screen overflow-hidden bg-canvas">
+    <aside class="w-60 flex-shrink-0 flex flex-col bg-surface border-r border-border">
+      <!-- 品牌 -->
+      <div class="px-4 h-14 flex items-center gap-2.5 border-b border-border">
+        <div class="w-7 h-7 rounded-md flex items-center justify-center text-white font-bold text-xs"
+             style="background: var(--c-accent);">A</div>
+        <div class="leading-tight">
+          <div class="font-semibold text-sm text-fg">AMAGI Core</div>
+          <div class="text-[11px] text-subtle">記憶與技能同步器</div>
         </div>
       </div>
 
-      <nav class="flex-1 p-3 space-y-1 overflow-y-auto">
-        <div class="text-xs font-bold uppercase tracking-wider px-2 pt-2 pb-1" style="color: #6f6883;">功能</div>
-        <RouterLink
-          v-for="item in navItems"
-          :key="item.to"
-          :to="item.to"
-          class="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm transition-colors no-underline"
-          style="color: #2e2a3f;"
-          active-class="nav-active"
-        >
-          <span class="text-base leading-none">{{ item.icon }}</span>
-          <span class="flex-1">{{ item.label }}</span>
-          <span
-            v-if="item.badge && reviewStore.pendingCount > 0"
-            class="text-xs font-bold text-white rounded-full px-1.5 min-w-[20px] text-center"
-            style="background: #7c5cff; padding-top: 2px; padding-bottom: 2px;"
-          >{{ reviewStore.pendingCount }}</span>
-        </RouterLink>
+      <!-- 導覽 -->
+      <nav class="flex-1 px-2.5 py-3 overflow-y-auto">
+        <template v-for="(group, gi) in navGroups" :key="gi">
+          <div class="text-[10px] font-semibold uppercase tracking-wider px-2 mb-1"
+               :class="gi > 0 ? 'mt-4' : ''" style="color: var(--c-subtle);">{{ group.title }}</div>
+          <RouterLink
+            v-for="item in group.items"
+            :key="item.to"
+            :to="item.to"
+            class="nav-link mb-0.5"
+            active-class="nav-active"
+          >
+            <span class="text-[15px] leading-none w-5 text-center opacity-80">{{ item.icon }}</span>
+            <span class="flex-1">{{ item.label }}</span>
+            <span v-if="item.badge && reviewStore.pendingCount > 0" class="pill tone-accent">
+              {{ reviewStore.pendingCount }}
+            </span>
+          </RouterLink>
+        </template>
       </nav>
 
-      <div class="p-3 text-xs text-center border-t" style="color: #6f6883; border-color: #ded6f5;">v0.1.0 MVP</div>
+      <!-- 頁尾：主題切換 + 版本 -->
+      <div class="px-2.5 py-2.5 border-t border-border flex items-center justify-between">
+        <button class="btn btn-ghost btn-sm" @click="toggle" :title="theme === 'dark' ? '切換為淺色' : '切換為深色'">
+          <span>{{ theme === 'dark' ? '🌙' : '☀️' }}</span>
+          <span>{{ theme === 'dark' ? '深色' : '淺色' }}</span>
+        </button>
+        <span class="text-[11px] text-subtle pr-1">v0.1.0</span>
+      </div>
     </aside>
 
-    <main class="flex-1 overflow-y-auto p-6">
-      <RouterView />
+    <main class="flex-1 overflow-y-auto">
+      <div class="max-w-5xl mx-auto px-7 py-6">
+        <RouterView />
+      </div>
     </main>
   </div>
 </template>
@@ -46,20 +55,37 @@ import { onMounted } from 'vue'
 import { RouterLink, RouterView } from 'vue-router'
 import { useReviewStore } from './stores/reviewStore'
 import { useProjectStore } from './stores/projectStore'
+import { useTheme } from './composables/useTheme'
 
 const reviewStore = useReviewStore()
 const projectStore = useProjectStore()
+const { theme, toggle } = useTheme()
 
-const navItems = [
-  { to: '/dashboard', icon: '🏠', label: '總覽', badge: false },
-  { to: '/projects', icon: '📁', label: '專案管理', badge: false },
-  { to: '/run', icon: '▶️', label: '引導式執行', badge: false },
-  { to: '/learn', icon: '🔍', label: '學習變更', badge: false },
-  { to: '/review', icon: '📋', label: '審核佇列', badge: true },
-  { to: '/skills', icon: '⚡', label: '技能管理', badge: false },
-  { to: '/sync', icon: '🔄', label: '同步預覽', badge: false },
-  { to: '/workflows', icon: '🔧', label: '工作流程', badge: false },
-  { to: '/settings', icon: '⚙️', label: '設定', badge: false },
+const navGroups = [
+  {
+    title: '工作區',
+    items: [
+      { to: '/dashboard', icon: '🏠', label: '總覽', badge: false },
+      { to: '/projects', icon: '📁', label: '專案管理', badge: false },
+    ],
+  },
+  {
+    title: '任務',
+    items: [
+      { to: '/run', icon: '▶️', label: '引導式執行', badge: false },
+      { to: '/learn', icon: '🔍', label: '學習變更', badge: false },
+      { to: '/review', icon: '📋', label: '審核佇列', badge: true },
+      { to: '/skills', icon: '⚡', label: '技能管理', badge: false },
+      { to: '/sync', icon: '🔄', label: '同步預覽', badge: false },
+      { to: '/workflows', icon: '🔧', label: '工作流程', badge: false },
+    ],
+  },
+  {
+    title: '系統',
+    items: [
+      { to: '/settings', icon: '⚙️', label: '設定', badge: false },
+    ],
+  },
 ]
 
 onMounted(async () => {
@@ -67,16 +93,3 @@ onMounted(async () => {
   await reviewStore.fetchItems()
 })
 </script>
-
-<style>
-.nav-active {
-  background-color: #eee8ff !important;
-  color: #5037c9 !important;
-  font-weight: 600;
-}
-a:hover {
-  background-color: #eee8ff;
-  text-decoration: none;
-}
-* { box-sizing: border-box; }
-</style>

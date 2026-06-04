@@ -1,16 +1,14 @@
 <template>
   <div>
     <div class="mb-6">
-      <h1 class="text-2xl font-bold mb-1" style="color: #201b34;">學習變更</h1>
-      <p class="text-sm" style="color: #6f6883;">掃描選取專案的 git diff，產生候選記憶與技能</p>
+      <h1 class="page-title mb-1">學習變更</h1>
+      <p class="page-sub">掃描選取專案的 git diff，產生候選記憶與技能</p>
     </div>
 
     <!-- 選擇專案 -->
-    <div class="rounded-2xl p-4 border mb-4" style="background: white; border-color: #ded6f5;">
-      <label class="text-sm font-bold mb-2 block" style="color: #2e2a3f;">選擇專案</label>
-      <select v-model="selectedId"
-              class="w-full rounded-xl border px-3 py-2 text-sm"
-              style="border-color: #ded6f5; color: #2e2a3f;">
+    <div class="card p-4 mb-4">
+      <label class="text-sm font-bold mb-2 block text-fg">選擇專案</label>
+      <select v-model="selectedId" class="select w-full">
         <option value="">— 請選擇 —</option>
         <option v-for="p in projectStore.projects" :key="p.id" :value="p.id">{{ p.name }}</option>
       </select>
@@ -18,41 +16,39 @@
 
     <div class="flex gap-3 mb-4">
       <button @click="doScan" :disabled="!selectedId || loading"
-              class="px-4 py-2 rounded-xl text-sm font-bold text-white disabled:opacity-50"
-              style="background: #5037c9;">掃描 Git 變更</button>
+              class="btn btn-ghost disabled:opacity-50">掃描 Git 變更</button>
       <button @click="doLearn" :disabled="!selectedId || loading"
-              class="px-4 py-2 rounded-xl text-sm font-bold text-white disabled:opacity-50"
-              style="background: #7c5cff;">產生候選記憶</button>
+              class="btn btn-primary disabled:opacity-50">產生候選記憶</button>
     </div>
 
-    <div v-if="error" class="rounded-2xl p-4 mb-4 border" style="background: #fff0f0; border-color: #efb5b5;">
-      <span class="text-sm" style="color: #ab3a3a;">{{ error }}</span>
+    <div v-if="error" class="alert tone-danger mb-4">
+      <span class="text-sm">{{ error }}</span>
     </div>
 
-    <div v-if="learnResult" class="rounded-2xl p-4 mb-4 border" style="background: #eefaf4; border-color: #bde8d1;">
-      <div class="font-bold text-sm" style="color: #1d7a51;">
+    <div v-if="learnResult" class="alert tone-success mb-4">
+      <div class="font-bold text-sm">
         產生 {{ learnResult.candidatesGenerated }} 個候選項
         <span v-if="learnResult.blockedCount > 0">（{{ learnResult.blockedCount }} 個已封鎖）</span>
       </div>
-      <RouterLink to="/review" class="inline-block mt-2 text-xs font-bold" style="color: #5037c9;">前往審核 →</RouterLink>
+      <RouterLink to="/review" class="inline-block mt-2 text-xs font-bold" style="color: var(--c-accent)">前往審核 →</RouterLink>
     </div>
 
     <!-- Diff 摘要 -->
-    <div v-if="scanResult" class="rounded-2xl border overflow-hidden" style="border-color: #ded6f5;">
-      <div class="p-4 border-b" style="border-color: #ded6f5; background: #f9f7ff;">
-        <div class="font-bold text-sm" style="color: #2e2a3f;">
-          分支：<span style="color: #7c5cff;">{{ scanResult.branch }}</span>
+    <div v-if="scanResult" class="card overflow-hidden">
+      <div class="p-4 border-b border-border bg-surface-2">
+        <div class="font-bold text-sm text-fg">
+          分支：<span style="color: var(--c-accent)">{{ scanResult.branch }}</span>
         </div>
       </div>
 
-      <div class="p-4 border-b" style="border-color: #ded6f5;">
-        <div class="text-xs font-bold mb-2" style="color: #6f6883;">變更概要</div>
-        <pre class="text-xs whitespace-pre-wrap" style="color: #2e2a3f; font-family: 'Cascadia Code', Consolas, monospace;">{{ scanResult.diffStat || '（無變更）' }}</pre>
+      <div class="p-4 border-b border-border">
+        <div class="text-xs font-bold mb-2 text-muted">變更概要</div>
+        <pre class="text-xs whitespace-pre-wrap bg-surface-2 text-fg font-mono">{{ scanResult.diffStat || '（無變更）' }}</pre>
       </div>
 
       <div class="p-4">
-        <div class="text-xs font-bold mb-2" style="color: #6f6883;">最近提交</div>
-        <pre class="text-xs" style="color: #6f6883; font-family: 'Cascadia Code', Consolas, monospace;">{{ scanResult.recentLog || '（無記錄）' }}</pre>
+        <div class="text-xs font-bold mb-2 text-muted">最近提交</div>
+        <pre class="text-xs bg-surface-2 text-muted font-mono">{{ scanResult.recentLog || '（無記錄）' }}</pre>
       </div>
     </div>
   </div>

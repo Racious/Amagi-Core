@@ -3,52 +3,48 @@
     <!-- 頁首 -->
     <div class="flex items-center justify-between">
       <div>
-        <h1 class="text-2xl font-bold" style="color: #2e2a3f;">引導式執行</h1>
-        <p class="text-sm mt-1" style="color: #6f6883;">AMAGI 分步驅動 AI，一步一回報，不跳步</p>
+        <h1 class="page-title mb-1">引導式執行</h1>
+        <p class="page-sub">AMAGI 分步驅動 AI，一步一回報，不跳步</p>
       </div>
     </div>
 
     <!-- 專案選擇 -->
-    <div class="rounded-2xl border p-4" style="background:white; border-color:#ded6f5;">
-      <label class="text-xs font-bold uppercase tracking-wider" style="color:#6f6883;">專案</label>
+    <div class="card p-4">
+      <label class="text-xs font-bold uppercase tracking-wider text-muted">專案</label>
       <select v-model="selectedId" @change="onProjectChange"
-              class="mt-2 w-full px-3 py-2 rounded-xl border text-sm"
-              style="border-color:#ded6f5; color:#2e2a3f;">
+              class="select mt-2">
         <option :value="null" disabled>請選擇專案…</option>
         <option v-for="p in initializedProjects" :key="p.id" :value="p.id">{{ p.name }}</option>
       </select>
     </div>
 
-    <div v-if="error" class="p-4 rounded-xl border text-sm" style="background:#fff0f0; border-color:#ffb3b3; color:#c0392b;">
+    <div v-if="error" class="alert tone-danger">
       {{ error }}
     </div>
 
     <!-- ① 沒有進行中的流程 → 開始表單 -->
     <div v-if="selectedId && !activeRun"
-         class="rounded-2xl border p-5 space-y-4" style="background:white; border-color:#ded6f5;">
+         class="card p-5 space-y-4">
       <div>
-        <label class="text-xs font-bold uppercase tracking-wider" style="color:#6f6883;">流程類型</label>
+        <label class="text-xs font-bold uppercase tracking-wider text-muted">流程類型</label>
         <div class="flex gap-2 mt-2">
           <button v-for="wf in workflowTypes" :key="wf.id"
                   @click="chosenWorkflow = wf.id"
-                  class="px-4 py-2 rounded-xl text-sm font-medium border transition"
-                  :style="chosenWorkflow === wf.id
-                    ? 'background:#7c5cff; color:white; border-color:#7c5cff;'
-                    : 'background:white; color:#6f6883; border-color:#ded6f5;'">
+                  class="btn btn-ghost btn-sm"
+                  :class="chosenWorkflow === wf.id ? 'border-accent' : ''"
+                  :style="chosenWorkflow === wf.id ? 'background: var(--c-accent-soft)' : ''">
             {{ wf.label }}
           </button>
         </div>
       </div>
       <div>
-        <label class="text-xs font-bold uppercase tracking-wider" style="color:#6f6883;">任務描述</label>
+        <label class="text-xs font-bold uppercase tracking-wider text-muted">任務描述</label>
         <textarea v-model="taskInput" rows="3"
                   placeholder="例如：新增悔棋功能，讓玩家可以撤回上一步棋"
-                  class="mt-2 w-full px-3 py-2 rounded-xl border text-sm"
-                  style="border-color:#ded6f5; color:#2e2a3f;"></textarea>
+                  class="input mt-2"></textarea>
       </div>
       <button @click="startRun" :disabled="!canStart || busy"
-              class="px-4 py-2 rounded-xl text-sm font-bold text-white disabled:opacity-50"
-              style="background: linear-gradient(135deg, #7c5cff, #9b7fff);">
+              class="btn btn-primary disabled:opacity-50">
         {{ busy ? '建立中…' : '▶ 開始流程' }}
       </button>
     </div>
@@ -56,71 +52,69 @@
     <!-- ② 進行中 / 已完成 -->
     <div v-if="activeRun" class="space-y-4">
       <!-- 流程標頭 -->
-      <div class="rounded-2xl border p-4" style="background:#f4f0ff; border-color:#ded6f5;">
+      <div class="card p-4">
         <div class="flex items-center justify-between">
           <div>
-            <span class="font-semibold" style="color:#2e2a3f;">{{ activeRun.workflowName }}</span>
-            <span class="text-xs ml-2 px-2 py-0.5 rounded-full"
-                  :style="statusStyle(activeRun.status)">{{ statusLabel(activeRun.status) }}</span>
+            <span class="font-semibold text-fg">{{ activeRun.workflowName }}</span>
+            <span class="pill ml-2" :class="statusTone(activeRun.status)">{{ statusLabel(activeRun.status) }}</span>
           </div>
           <button @click="cancelRun" :disabled="busy"
-                  class="text-xs px-2 py-1 rounded-lg" style="background:#fff0f0; color:#d85c5c;">中止</button>
+                  class="btn btn-danger btn-sm">中止</button>
         </div>
-        <div class="text-sm mt-1" style="color:#6f6883;">{{ activeRun.task }}</div>
+        <div class="text-sm mt-1 text-muted">{{ activeRun.task }}</div>
       </div>
 
       <!-- 步驟時間軸 -->
-      <div class="rounded-2xl border p-4 space-y-2" style="background:white; border-color:#ded6f5;">
+      <div class="card p-4 space-y-2">
         <div v-for="(step, i) in activeRun.steps" :key="step.id"
              class="flex items-start gap-3 p-2 rounded-xl"
              :style="i === activeRun.currentStep && activeRun.status === 'awaitingResult'
-               ? 'background:#f4f0ff;' : ''">
+               ? 'background: var(--c-accent-soft)' : ''">
           <span class="text-base mt-0.5">{{ stepIcon(step.status) }}</span>
           <div class="flex-1">
-            <div class="text-sm font-medium" style="color:#2e2a3f;">
+            <div class="text-sm font-medium text-fg">
               步驟 {{ i + 1 }}：{{ step.name }}
             </div>
-            <div v-if="step.result" class="text-xs mt-1 p-2 rounded-lg whitespace-pre-wrap"
-                 style="background:#f7f5ff; color:#6f6883; max-height:120px; overflow:auto;">{{ step.result }}</div>
+            <div v-if="step.result" class="text-xs mt-1 p-2 rounded-lg whitespace-pre-wrap bg-surface-2 text-muted"
+                 style="max-height:120px; overflow:auto;">{{ step.result }}</div>
           </div>
         </div>
       </div>
 
       <!-- 當前步驟操作 -->
       <div v-if="activeRun.status === 'awaitingResult'"
-           class="rounded-2xl border p-5 space-y-3" style="background:white; border-color:#7c5cff;">
-        <div class="text-sm font-bold" style="color:#5037c9;">
+           class="card p-5 space-y-3 border-accent">
+        <div class="text-sm font-bold" style="color: var(--c-accent);">
           目前步驟：{{ currentStep?.name }}
         </div>
-        <div class="text-sm" style="color:#2e2a3f;">{{ currentStep?.instruction }}</div>
+        <div class="text-sm text-fg">{{ currentStep?.instruction }}</div>
 
-        <div class="p-3 rounded-xl text-sm" style="background:#fffbea; color:#705100;">
+        <div class="alert tone-warning">
           <div class="font-bold mb-1">👉 請對 Claude / Codex 說：</div>
-          <code class="block p-2 rounded-lg text-xs" style="background:#2b2736; color:#f7f4ee;">{{ instructionLine }}</code>
-          <button @click="copyInstruction" class="mt-2 text-xs px-2 py-1 rounded-lg" style="background:#eee8ff; color:#5037c9;">
+          <code class="block p-2 rounded-lg text-xs font-mono bg-surface-2 text-fg">{{ instructionLine }}</code>
+          <button @click="copyInstruction" class="btn btn-ghost btn-sm mt-2">
             {{ copied ? '✓ 已複製' : '複製指令' }}
           </button>
         </div>
 
         <button @click="advance" :disabled="busy"
-                class="w-full px-4 py-2.5 rounded-xl text-sm font-bold text-white disabled:opacity-50"
-                style="background: linear-gradient(135deg, #3cae78, #2d9d6a);">
+                class="btn btn-primary w-full disabled:opacity-50">
           {{ busy ? '讀取中…' : '✅ AI 已完成，讀取結果並推進' }}
         </button>
-        <div class="text-xs text-center" style="color:#9f97b5;">
+        <div class="text-xs text-center text-subtle">
           AMAGI 會讀取 <code>.amagi/state/result.md</code>，記錄後推進到下一步
         </div>
       </div>
 
       <!-- 完成 -->
       <div v-else-if="activeRun.status === 'done'"
-           class="rounded-2xl border p-5 text-center" style="background:#ecf8ec; border-color:#cce8ce;">
+           class="card p-5 text-center alert tone-success">
         <div class="text-3xl mb-2">🎉</div>
-        <div class="font-bold" style="color:#1f7a4d;">流程完成</div>
-        <div class="text-sm mt-1" style="color:#6f6883;">所有步驟都已執行完畢</div>
+        <div class="font-bold" style="color: var(--c-success);">流程完成</div>
+        <div class="text-sm mt-1 text-muted">所有步驟都已執行完畢</div>
         <div class="flex gap-2 justify-center mt-4">
-          <RouterLink to="/review" class="text-xs px-3 py-1.5 rounded-lg font-medium text-white" style="background:#7c5cff;">前往審核 →</RouterLink>
-          <button @click="resetRun" class="text-xs px-3 py-1.5 rounded-lg font-medium" style="background:#eee8ff; color:#5037c9;">開始新流程</button>
+          <RouterLink to="/review" class="btn btn-primary btn-sm">前往審核 →</RouterLink>
+          <button @click="resetRun" class="btn btn-ghost btn-sm">開始新流程</button>
         </div>
       </div>
     </div>
@@ -160,10 +154,10 @@ function stepIcon(s: BridgeStepStatus) {
 function statusLabel(s: BridgeRunStatus) {
   return s === 'awaitingResult' ? '進行中' : s === 'done' ? '已完成' : '已中止'
 }
-function statusStyle(s: BridgeRunStatus) {
-  if (s === 'done') return 'background:#ecf8ec; color:#1f7a4d;'
-  if (s === 'cancelled') return 'background:#fff0f0; color:#d85c5c;'
-  return 'background:#fff4db; color:#916216;'
+function statusTone(s: BridgeRunStatus) {
+  if (s === 'done') return 'tone-success'
+  if (s === 'cancelled') return 'tone-danger'
+  return 'tone-warning'
 }
 
 async function onProjectChange() {

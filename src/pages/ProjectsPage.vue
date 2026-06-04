@@ -2,57 +2,47 @@
   <div>
     <div class="flex items-center justify-between mb-6">
       <div>
-        <h1 class="text-2xl font-bold mb-1" style="color: #201b34;">專案管理</h1>
-        <p class="text-sm" style="color: #6f6883;">新增、初始化與管理受監控的 Git 專案</p>
+        <h1 class="page-title mb-1">專案管理</h1>
+        <p class="page-sub">新增、初始化與管理受監控的 Git 專案</p>
       </div>
-      <button @click="openFolderPicker"
-              class="px-4 py-2 rounded-xl text-sm font-bold text-white transition-opacity hover:opacity-90"
-              style="background: #7c5cff;">
+      <button @click="openFolderPicker" class="btn btn-primary">
         + 新增專案
       </button>
     </div>
 
     <!-- 錯誤訊息 -->
-    <div v-if="error" class="rounded-2xl p-4 mb-4 border" style="background: #fff0f0; border-color: #efb5b5;">
-      <span class="text-sm" style="color: #ab3a3a;">{{ error }}</span>
+    <div v-if="error" class="alert tone-danger mb-4">
+      <span class="text-sm">{{ error }}</span>
     </div>
 
     <!-- 成功訊息 -->
-    <div v-if="successMsg" class="rounded-2xl p-4 mb-4 border" style="background: #eefaf4; border-color: #bde8d1;">
-      <span class="text-sm" style="color: #1d7a51;">{{ successMsg }}</span>
+    <div v-if="successMsg" class="alert tone-success mb-4">
+      <span class="text-sm">{{ successMsg }}</span>
     </div>
 
     <div v-if="projectStore.projects.length === 0"
-         class="rounded-2xl p-8 text-center border"
-         style="background: white; border-color: #ded6f5; border-style: dashed;">
+         class="card card-dashed p-8 text-center">
       <div class="text-4xl mb-3">📂</div>
-      <p class="text-sm" style="color: #6f6883;">點擊「新增專案」選擇本機 Git 專案資料夾。</p>
+      <p class="text-sm text-muted">點擊「新增專案」選擇本機 Git 專案資料夾。</p>
     </div>
 
     <div v-else class="space-y-3">
       <div
         v-for="project in projectStore.projects"
         :key="project.id"
-        class="rounded-2xl p-4 border flex items-center gap-4"
-        style="background: white; border-color: #ded6f5;"
+        class="card p-4 flex items-center gap-4"
       >
         <div class="flex-1 min-w-0">
-          <div class="font-bold truncate" style="color: #2e2a3f;">{{ project.name }}</div>
-          <div class="text-xs truncate mt-0.5" style="color: #6f6883;">{{ project.path }}</div>
+          <div class="font-bold truncate text-fg">{{ project.name }}</div>
+          <div class="text-xs truncate mt-0.5 text-muted">{{ project.path }}</div>
           <div class="flex items-center gap-2 mt-1.5">
-            <span v-if="project.currentBranch"
-                  class="text-xs px-2 py-0.5 rounded-full"
-                  style="background: #eee8ff; color: #5037c9;">
+            <span v-if="project.currentBranch" class="pill tone-accent">
               {{ project.currentBranch }}
             </span>
-            <span v-if="project.initialized"
-                  class="text-xs px-2 py-0.5 rounded-full"
-                  style="background: #eefaf4; color: #1d7a51;">
+            <span v-if="project.initialized" class="pill tone-success">
               已初始化
             </span>
-            <span v-else
-                  class="text-xs px-2 py-0.5 rounded-full"
-                  style="background: #fff7e8; color: #916216;">
+            <span v-else class="pill tone-warning">
               未初始化
             </span>
           </div>
@@ -62,13 +52,11 @@
             v-if="!project.initialized"
             @click="initProject(project.id)"
             :disabled="projectStore.loading"
-            class="px-3 py-1.5 rounded-xl text-xs font-bold text-white"
-            style="background: #3cae78;"
+            class="btn btn-primary btn-sm"
           >初始化</button>
           <button
             @click="removeProject(project.id)"
-            class="px-3 py-1.5 rounded-xl text-xs font-bold"
-            style="background: #fff0f0; color: #d85c5c;"
+            class="btn btn-danger btn-sm"
           >移除</button>
         </div>
       </div>
