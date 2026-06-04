@@ -15,6 +15,10 @@ dist-ssr
 # Claude Code 本機個人設定（不進版控）
 .claude/settings.local.json
 
+# 發版 CI 產物（由 extract-changelog.mjs 產生，不進版控）
+release-body.md
+AMAGI_Core_*_portable.exe
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

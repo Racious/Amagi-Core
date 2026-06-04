@@ -9,7 +9,9 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build",
+    "version:set": "node scripts/set-version.mjs",
+    "release:notes": "node scripts/extract-changelog.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
