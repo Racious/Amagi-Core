@@ -19,7 +19,8 @@
           <input v-else v-model="editTitle"
                  class="input w-full text-sm font-bold" />
         </div>
-        <button @click="startEdit"
+        <button v-if="item.itemType !== 'blocked'"
+                @click="startEdit"
                 class="btn btn-ghost btn-sm flex-shrink-0">
           {{ editing ? '取消' : '編輯' }}
         </button>
@@ -73,10 +74,16 @@
     <!-- 操作按鈕列 -->
     <div class="flex gap-2 p-3 border-t border-border">
       <template v-if="!editing">
-        <button @click="$emit('accept')"
-                class="btn btn-primary btn-sm flex-1">✅ 接受</button>
-        <button @click="$emit('ignore')"
-                class="btn btn-danger btn-sm flex-1">🚫 忽略</button>
+        <!-- 封鎖項：只能忽略（無法也不應接受／同步） -->
+        <button v-if="item.itemType === 'blocked'"
+                @click="$emit('ignore')"
+                class="btn btn-ghost btn-sm flex-1">知道了，忽略此項</button>
+        <template v-else>
+          <button @click="$emit('accept')"
+                  class="btn btn-primary btn-sm flex-1">✅ 接受</button>
+          <button @click="$emit('ignore')"
+                  class="btn btn-danger btn-sm flex-1">🚫 忽略</button>
+        </template>
       </template>
 
       <!-- 編輯模式按鈕：技能有「儲存並接受」快捷鍵 -->

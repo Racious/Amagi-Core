@@ -43,6 +43,19 @@
     </aside>
 
     <main class="flex-1 overflow-y-auto">
+      <!-- 更新橫幅 -->
+      <div v-if="updateStatus === 'available' || updateStatus === 'downloading'" class="px-7 pt-4">
+        <div class="alert tone-accent flex items-center gap-3">
+          <span class="text-sm flex-1" style="color: var(--c-accent);">
+            <template v-if="updateStatus === 'available'">🎉 發現新版本 v{{ newVersion }}，要立即更新嗎？</template>
+            <template v-else>下載並安裝中… {{ progress }}%（完成後將自動重啟）</template>
+          </span>
+          <template v-if="updateStatus === 'available'">
+            <button class="btn btn-primary btn-sm" @click="installUpdate">立即更新</button>
+            <button class="btn btn-ghost btn-sm" @click="dismiss">稍後</button>
+          </template>
+        </div>
+      </div>
       <div class="max-w-5xl mx-auto px-7 py-6">
         <RouterView />
       </div>
@@ -56,10 +69,12 @@ import { RouterLink, RouterView } from 'vue-router'
 import { useReviewStore } from './stores/reviewStore'
 import { useProjectStore } from './stores/projectStore'
 import { useTheme } from './composables/useTheme'
+import { useUpdater } from './composables/useUpdater'
 
 const reviewStore = useReviewStore()
 const projectStore = useProjectStore()
 const { theme, toggle } = useTheme()
+const { status: updateStatus, newVersion, progress, checkForUpdate, installUpdate, dismiss } = useUpdater()
 
 const navGroups = [
   {
@@ -77,6 +92,7 @@ const navGroups = [
       { to: '/review', icon: '📋', label: '審核佇列', badge: true },
       { to: '/skills', icon: '⚡', label: '技能管理', badge: false },
       { to: '/sync', icon: '🔄', label: '同步預覽', badge: false },
+      { to: '/diff-export', icon: '🧾', label: '差異匯出', badge: false },
       { to: '/workflows', icon: '🔧', label: '工作流程', badge: false },
     ],
   },
@@ -91,5 +107,7 @@ const navGroups = [
 onMounted(async () => {
   await projectStore.fetchProjects()
   await reviewStore.fetchItems()
+  // 啟動時靜默檢查更新（失敗不打擾；有新版才顯示橫幅）
+  checkForUpdate(true)
 })
 </script>

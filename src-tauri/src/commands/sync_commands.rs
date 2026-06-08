@@ -13,7 +13,9 @@ fn scan_item_conflicts(items: &[ReviewItem]) -> Vec<ItemConflict> {
             out.push(ItemConflict {
                 item_id: item.id.clone(),
                 item_title: item.title.clone(),
-                reasons: r.conflicts.iter().map(|c| c.reason.clone()).collect(),
+                reasons: r.conflicts.iter()
+                    .map(|c| format!("{}（命中：{}）", c.reason, c.matched))
+                    .collect(),
             });
         }
     }

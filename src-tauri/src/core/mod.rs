@@ -1,6 +1,7 @@
 pub mod safety_filter;
 pub mod conflict_filter;
 pub mod git_scanner;
+pub mod diff_export;
 pub mod project_manager;
 pub mod learn_engine;
 pub mod pending_scanner;

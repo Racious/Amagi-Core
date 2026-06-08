@@ -9,12 +9,14 @@ pub fn generate_candidates(
     diff_stat: &str,
     diff_text: &str,
 ) -> Vec<ReviewItem> {
+    let mut candidates = Vec::new();
+
+    // 偵測疑似機密：不再「一次擋全部」，而是加一筆「待確認」封鎖項
+    //（帶規則名與遮罩片段供判斷），其餘正常候選照常產生。
     let safety = safety_filter::check(diff_text);
     if !safety.is_safe {
-        return vec![blocked_item(project_id, diff_text)];
+        candidates.push(blocked_item(project_id, &safety.hits));
     }
-
-    let mut candidates = Vec::new();
 
     let has_readme = changed_files.iter().any(|f| {
         let lower = f.to_lowercase();
@@ -101,21 +103,35 @@ pub fn generate_candidates(
     candidates
 }
 
-fn blocked_item(project_id: &str, _content: &str) -> ReviewItem {
+fn blocked_item(project_id: &str, hits: &[safety_filter::SafetyHit]) -> ReviewItem {
+    let mut lines = vec![
+        "AMAGI 偵測到這次變更中有下列疑似機密，已擋下自動保存。".to_string(),
+        "請確認是否為誤判：".to_string(),
+        String::new(),
+    ];
+    for h in hits {
+        lines.push(format!("• {}：{}", h.label, h.masked));
+    }
+    lines.push(String::new());
+    lines.push("處置建議：".to_string());
+    lines.push("- 若是誤判（例如 commit SHA、雜湊值），點「忽略」即可，不影響其他記憶。".to_string());
+    lines.push("- 若確為真實機密，請從原始檔與 git 紀錄中移除，切勿同步進 AGENTS.md／CLAUDE.md。".to_string());
+
     ReviewItem {
         id: Uuid::new_v4().to_string(),
         project_id: project_id.to_string(),
         item_type: ReviewItemType::Blocked,
         category: "sensitive".to_string(),
-        title: "疑似敏感內容（已封鎖）".to_string(),
-        content: "偵測到可能的 token、密碼或金鑰，此候選項已封鎖，不允許自動保存。".to_string(),
+        title: "疑似敏感內容（待確認）".to_string(),
+        content: lines.join("\n"),
         risk: RiskLevel::High,
-        status: ReviewStatus::Ignored,
+        // 改為 Pending：留在審核佇列供老爺檢視判斷，而非自動忽略
+        status: ReviewStatus::Pending,
         sync_targets: vec![],
         sync_scope: SyncScope::Project,
         source_pending_file: None,
         created_at: Utc::now(),
-        reviewed_at: Some(Utc::now()),
+        reviewed_at: None,
     }
 }
 
@@ -195,12 +211,18 @@ mod tests {
     }
 
     #[test]
-    fn test_sensitive_blocks_all() {
+    fn test_sensitive_adds_reviewable_blocked_item() {
         let files = vec!["README.md".to_string()];
         let diff = "api_key=sk-secret123abc";
         let candidates = generate_candidates("proj1", &files, "", diff);
-        assert_eq!(candidates.len(), 1);
-        assert_eq!(candidates[0].item_type, ReviewItemType::Blocked);
+        let blocked = candidates
+            .iter()
+            .find(|c| c.item_type == ReviewItemType::Blocked)
+            .expect("應有一筆封鎖項");
+        // 改為待確認（Pending），留在佇列供檢視，而非自動忽略
+        assert_eq!(blocked.status, ReviewStatus::Pending);
+        // 內容應帶規則名，讓使用者看得出觸發原因
+        assert!(blocked.content.contains("API key"));
     }
 
     #[test]

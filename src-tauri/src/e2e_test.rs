@@ -304,9 +304,13 @@ fn e2e_safety_filter_blocks_secret_in_learn() {
     let diff = "diff --git a/config.ts b/config.ts\n+const apiKey = \"sk-abcdef0123456789secrettoken\"";
     let candidates = learn_engine::generate_candidates("p-secret", &changed, "", diff);
 
-    assert_eq!(candidates.len(), 1);
-    assert_eq!(candidates[0].item_type, ReviewItemType::Blocked);
-    assert_eq!(candidates[0].status, ReviewStatus::Ignored);
+    let blocked = candidates
+        .iter()
+        .find(|c| c.item_type == ReviewItemType::Blocked)
+        .expect("應有封鎖項");
+    // 改為待確認：留在審核佇列供檢視，內容帶規則名
+    assert_eq!(blocked.status, ReviewStatus::Pending);
+    assert!(blocked.content.contains("API key"));
 }
 
 // ───────────────────────────────────────────────────────────
@@ -329,4 +333,83 @@ fn e2e_remove_project() {
 #[allow(dead_code)]
 fn _assert_project_type(p: Project) -> String {
     p.id
+}
+
+// ───────────────────────────────────────────────────────────
+// 7. 差異匯出：真實 git repo，改/增/刪三檔 → 列檔 + 產生 diff（兩框）
+// ───────────────────────────────────────────────────────────
+use crate::core::diff_export;
+use crate::models::diff::{ChangedStatus, DiffGroup};
+
+/// 在 repo 執行 git（純測試用；commit 以 -c 內聯身分，不寫任何 config）
+fn git(repo: &std::path::Path, args: &[&str]) {
+    let ok = std::process::Command::new("git")
+        .args(args)
+        .current_dir(repo)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    assert!(ok, "git {:?} 失敗", args);
+}
+
+#[test]
+fn e2e_diff_export_real_git() {
+    let base = std::env::temp_dir().join(format!("amagi-diff-{}", Uuid::new_v4()));
+    let repo = base.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+
+    // 初始化 + 首個 commit（a.txt 之後會改、c.txt 之後會刪）
+    git(&repo, &["init", "-q"]);
+    std::fs::write(repo.join("a.txt"), "l1\nl2\n").unwrap();
+    std::fs::write(repo.join("c.txt"), "gone\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &[
+        "-c", "user.email=test@amagi.local",
+        "-c", "user.name=amagi-test",
+        "commit", "-q", "-m", "init",
+    ]);
+
+    // 製造三種異動：改 a.txt、新增 b.txt（未追蹤）、刪 c.txt
+    std::fs::write(repo.join("a.txt"), "l1\nCHANGED\n").unwrap();
+    std::fs::write(repo.join("b.txt"), "new1\nnew2\n").unwrap();
+    std::fs::remove_file(repo.join("c.txt")).unwrap();
+
+    let repo_str = repo.to_string_lossy().to_string();
+
+    // ── 列出異動檔：分組正確 ──
+    let listed = diff_export::list_changed_files(&repo_str).unwrap();
+    let find = |p: &str| listed.iter().find(|f| f.path == p).expect(p);
+    assert_eq!(find("a.txt").status, ChangedStatus::Modified);
+    assert_eq!(find("a.txt").group, DiffGroup::Edited);
+    assert_eq!(find("b.txt").status, ChangedStatus::Untracked);
+    assert_eq!(find("b.txt").group, DiffGroup::AddedDeleted);
+    assert_eq!(find("c.txt").status, ChangedStatus::Deleted);
+    assert_eq!(find("c.txt").group, DiffGroup::AddedDeleted);
+
+    // ── 全選三檔產生 diff ──
+    let all = vec!["a.txt".to_string(), "b.txt".to_string(), "c.txt".to_string()];
+    let bundle = diff_export::generate_diff_text(&repo_str, &all).unwrap();
+
+    // 框1（異動）：含 a.txt 的修改
+    assert!(bundle.edited_patch.contains("Index: a.txt"));
+    assert!(bundle.edited_patch.contains("+CHANGED"));
+    assert!(!bundle.edited_patch.contains("Index: b.txt")); // 新檔不在框1
+    // 框2（新增/刪除）：新增 b.txt（整排 +）、刪除 c.txt（整排 -）
+    assert!(bundle.added_deleted_patch.contains("Index: b.txt"));
+    assert!(bundle.added_deleted_patch.contains("+new1"));
+    assert!(bundle.added_deleted_patch.contains("Index: c.txt"));
+    assert!(bundle.added_deleted_patch.contains("-gone"));
+
+    // ── 範圍卡控：只勾 a.txt，其餘不得出現 ──
+    let only_a = vec!["a.txt".to_string()];
+    let b2 = diff_export::generate_diff_text(&repo_str, &only_a).unwrap();
+    assert!(b2.edited_patch.contains("Index: a.txt"));
+    assert!(b2.added_deleted_patch.is_empty(), "未勾選的新增/刪除不該出現");
+
+    // ── 安全：不在清單內的路徑被忽略；跳脫路徑被擋 ──
+    let ignored = diff_export::generate_diff_text(&repo_str, &vec!["not-listed.txt".to_string()]).unwrap();
+    assert!(ignored.edited_patch.is_empty() && ignored.added_deleted_patch.is_empty());
+    assert!(diff_export::generate_diff_text(&repo_str, &vec!["../escape".to_string()]).is_err());
+
+    let _ = std::fs::remove_dir_all(&base);
 }

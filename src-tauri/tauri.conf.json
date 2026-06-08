@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "AMAGI Core",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "identifier": "com.racious.amagi-core",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -22,16 +22,24 @@
         "decorations": true
       }
     ],
-    "trayIcon": {
-      "iconPath": "icons/32x32.png",
-      "iconAsTemplate": false
-    },
     "security": {
       "csp": null
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDRCODU0N0FCRkQ0RDcwNTQKUldSVWNFMzlxMGVGUzVhS0Z2TklMZ1oyeE5WL2wyVEdMeWJweGFlL0pUTVFTWm1SOWdMS2J3eGkK",
+      "endpoints": [
+        "https://github.com/Racious/Amagi-Core/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": "all",
     "icon": [
       "icons/32x32.png",

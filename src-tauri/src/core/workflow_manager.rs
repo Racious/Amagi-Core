@@ -1,5 +1,4 @@
 use std::path::Path;
-use std::process::Command;
 use chrono::Utc;
 use uuid::Uuid;
 use crate::AppError;
@@ -196,7 +195,7 @@ pub fn plan_workflow(
         args.push(format!("{}={}", k, v));
     }
 
-    let output = Command::new("node")
+    let output = crate::utils::proc::command("node")
         .arg(runner_path)
         .args(&args)
         .current_dir(project_path)
