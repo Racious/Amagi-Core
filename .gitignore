@@ -19,6 +19,15 @@ dist-ssr
 release-body.md
 AMAGI_Core_*_portable.exe
 
+# 圖標設計探索資產（僅留本機，不納版控）
+/public/icon-concepts/
+/public/amagi-core-icon-16.png
+/public/amagi-core-icon-32.png
+/public/amagi-core-icon-64.png
+/public/amagi-core-icon-128.png
+/public/amagi-core-icon-256.png
+/public/amagi-core-icon-size-preview.png
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
