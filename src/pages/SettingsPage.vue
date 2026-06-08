@@ -39,11 +39,27 @@
       </div>
     </div>
 
+    <!-- 軟體更新 -->
+    <div class="card p-5 mb-4">
+      <div class="font-semibold text-sm mb-3 text-fg">軟體更新</div>
+      <div class="flex items-center gap-3 flex-wrap">
+        <button class="btn btn-primary btn-sm"
+                :disabled="updateStatus === 'checking' || updateStatus === 'downloading'"
+                @click="checkForUpdate(false)">
+          {{ updateStatus === 'checking' ? '檢查中…' : '檢查更新' }}
+        </button>
+        <button v-if="updateStatus === 'available'" class="btn btn-ghost btn-sm" @click="installUpdate">
+          ⬇️ 立即更新 v{{ newVersion }}
+        </button>
+        <span class="text-xs text-muted">{{ updateText }}</span>
+      </div>
+    </div>
+
     <!-- 關於 -->
     <div class="card p-5">
       <div class="font-semibold text-sm mb-2 text-fg">關於 AMAGI Core</div>
       <div class="text-sm text-muted space-y-1">
-        <div>版本：0.1.0 MVP</div>
+        <div>版本：{{ appVersion }}</div>
         <div>技術棧：Tauri 2 + Rust + Vue 3</div>
         <div>儲存位置：%APPDATA%\AMAGI Core\</div>
       </div>
@@ -52,11 +68,30 @@
 </template>
 
 <script setup lang="ts">
+import { ref, computed, onMounted } from 'vue'
+import { getVersion } from '@tauri-apps/api/app'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useTheme, type Theme } from '../composables/useTheme'
+import { useUpdater } from '../composables/useUpdater'
 
 const settingsStore = useSettingsStore()
 const { theme, set } = useTheme()
+const { status: updateStatus, newVersion, errorMsg, progress, checkForUpdate, installUpdate } = useUpdater()
+
+const appVersion = ref('—')
+onMounted(async () => {
+  try { appVersion.value = await getVersion() } catch { /* 非 Tauri 環境 */ }
+})
+
+const updateText = computed(() => {
+  switch (updateStatus.value) {
+    case 'uptodate': return '已是最新版本'
+    case 'available': return `發現新版本 v${newVersion.value}`
+    case 'downloading': return `下載中… ${progress.value}%`
+    case 'error': return `檢查失敗：${errorMsg.value ?? ''}`
+    default: return ''
+  }
+})
 
 const themeOptions: { value: Theme; label: string; icon: string }[] = [
   { value: 'light', label: '淺色', icon: '☀️' },

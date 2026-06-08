@@ -11,6 +11,7 @@ mod e2e_test;
 
 use commands::project_commands::*;
 use commands::scan_commands::*;
+use commands::diff_commands::*;
 use commands::learn_commands::*;
 use commands::review_commands::*;
 use commands::sync_commands::*;
@@ -48,6 +49,19 @@ pub fn run() {
     std::fs::create_dir_all(&data_dir).expect("無法建立 AppData 目錄");
 
     tauri::Builder::default()
+        // 單一實例：必須最先註冊。再次啟動時不另開行程，
+        // 而是把既有（可能縮在系統匣的）視窗叫回前景。
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.show();
+                if w.is_minimized().unwrap_or(false) {
+                    let _ = w.unminimize();
+                }
+                let _ = w.set_focus();
+            }
+        }))
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState { data_dir })
@@ -73,6 +87,8 @@ pub fn run() {
             list_projects,
             remove_project,
             scan_project,
+            list_changed_files,
+            generate_diff_text,
             learn_from_project,
             list_review_items,
             accept_review_items,

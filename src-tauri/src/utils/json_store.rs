@@ -13,13 +13,6 @@ pub fn write_json<T: Serialize>(path: &Path, data: &T) -> Result<(), AppError> {
         .map_err(|e| AppError::Io(e.to_string()))
 }
 
-pub fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, AppError> {
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| AppError::Io(e.to_string()))?;
-    serde_json::from_str(&content)
-        .map_err(|e| AppError::Serialization(e.to_string()))
-}
-
 pub fn read_json_or_default<T>(path: &Path) -> T
 where
     T: for<'de> Deserialize<'de> + Default,

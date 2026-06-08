@@ -375,7 +375,7 @@ scope: project
 }
 
 pub fn get_project_info(project: &Project) -> ProjectInfo {
-    let branch = std::process::Command::new("git")
+    let branch = crate::utils::proc::command("git")
         .args(["branch", "--show-current"])
         .current_dir(&project.path)
         .output()

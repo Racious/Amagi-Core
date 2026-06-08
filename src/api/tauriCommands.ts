@@ -80,6 +80,24 @@ export interface FileDiffPreview {
   isNewFile: boolean
 }
 
+// ── 差異匯出 相關型別 ──────────────────────────────
+export type ChangedStatus = 'modified' | 'added' | 'deleted' | 'renamed' | 'untracked'
+export type DiffGroup = 'edited' | 'addedDeleted'
+
+export interface ChangedFile {
+  path: string
+  status: ChangedStatus
+  group: DiffGroup
+  staged: boolean
+}
+
+export interface DiffBundle {
+  editedPatch: string
+  addedDeletedPatch: string
+  skipped: string[]
+  truncated: boolean
+}
+
 // ── Workflow 相關型別 ──────────────────────────────
 export interface WorkflowInput {
   key: string
@@ -167,6 +185,11 @@ export const api = {
 
   syncAgentFiles: (projectId: string, force = false) => invoke<SyncResult>('sync_agent_files', { projectId, force }),
   previewSyncDiff: (projectId: string) => invoke<FileDiffPreview[]>('preview_sync_diff', { projectId }),
+
+  // ── 差異匯出 ──────────────────────────────────────
+  listChangedFiles: (projectId: string) => invoke<ChangedFile[]>('list_changed_files', { projectId }),
+  generateDiffText: (projectId: string, paths: string[]) =>
+    invoke<DiffBundle>('generate_diff_text', { projectId, paths }),
 
   // ── Workflow 指令 ──────────────────────────────
   scanProjectWorkflows: (projectId: string) =>

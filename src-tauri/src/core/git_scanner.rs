@@ -1,13 +1,14 @@
-use std::process::Command;
 use crate::AppError;
 use crate::models::sync::ScanResult;
 
 const ALLOWED_ARGS: &[&[&str]] = &[
     &["status", "--short"],
+    &["status", "--porcelain"],
     &["diff", "--stat"],
     &["diff"],
     &["log", "-5", "--oneline"],
     &["rev-parse", "--show-toplevel"],
+    &["rev-parse", "HEAD"],
     &["branch", "--show-current"],
 ];
 
@@ -21,7 +22,7 @@ fn run_git(project_path: &str, args: &[&str]) -> Result<String, AppError> {
     if !is_allowed(args) {
         return Err(AppError::CommandNotAllowed(format!("git {}", args.join(" "))));
     }
-    let output = Command::new("git")
+    let output = crate::utils::proc::command("git")
         .args(args)
         .current_dir(project_path)
         .output()
@@ -90,9 +91,72 @@ fn parse_changed_files(diff_stat: &str) -> Vec<String> {
         .collect()
 }
 
+// ── 差異匯出用：唯讀查詢 ───────────────────────────────────
+
+/// `git status --porcelain` 原始輸出（供解析異動檔清單）
+pub fn status_porcelain(project_path: &str) -> Result<String, AppError> {
+    run_git(project_path, &["status", "--porcelain"])
+}
+
+/// 取得 HEAD 的完整 SHA；若無任何 commit 則回傳 None
+pub fn head_sha(project_path: &str) -> Option<String> {
+    run_git(project_path, &["rev-parse", "HEAD"])
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// 驗證相對路徑安全（防跳脫、旗標注入、絕對路徑）
+pub fn validate_rel_path(p: &str) -> Result<(), AppError> {
+    let unsafe_path = p.is_empty()
+        || p.starts_with('-')          // 旗標注入
+        || p.starts_with('/')          // 絕對路徑
+        || p.starts_with('\\')
+        || p.contains(':')             // 磁碟機代號 C:\ 等
+        || p.split(['/', '\\']).any(|c| c == ".."); // 目錄跳脫
+    if unsafe_path {
+        return Err(AppError::CommandNotAllowed(format!("不安全的路徑：{}", p)));
+    }
+    Ok(())
+}
+
+/// 對單一（已驗證的）相對路徑取 `git diff HEAD -- <path>`。
+/// 僅建構 `diff HEAD --` + 經驗證的路徑，維持唯讀、不動 index。
+pub fn diff_one(project_path: &str, rel_path: &str) -> Result<String, AppError> {
+    validate_rel_path(rel_path)?;
+    let args = ["diff", "HEAD", "--", rel_path];
+    let output = crate::utils::proc::command("git")
+        .args(args)
+        .current_dir(project_path)
+        .output()
+        .map_err(|e| AppError::Git(e.to_string()))?;
+    // 注意：diff 在「有差異」時 exit code 仍為 0；僅在真正錯誤才非 0。
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        return Err(AppError::Git(stderr));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_validate_rel_path() {
+        assert!(validate_rel_path("src/stores/reader.ts").is_ok());
+        assert!(validate_rel_path("../etc/passwd").is_err());   // 跳脫
+        assert!(validate_rel_path("/etc/passwd").is_err());     // 絕對
+        assert!(validate_rel_path("C:\\Windows").is_err());     // 磁碟機
+        assert!(validate_rel_path("--output=x").is_err());      // 旗標注入
+        assert!(validate_rel_path("a/../../b").is_err());       // 中段跳脫
+    }
+
+    #[test]
+    fn test_allowlist_permits_porcelain_and_head() {
+        assert!(is_allowed(&["status", "--porcelain"]));
+        assert!(is_allowed(&["rev-parse", "HEAD"]));
+    }
 
     #[test]
     fn test_allowlist_rejects_commit() {
