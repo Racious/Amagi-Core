@@ -49,8 +49,19 @@
   --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
 }
 
-/* ── 深色 ────────────────────────────────────────────────── */
-[data-theme="dark"] {
+/* ── 深色系共用陰影 ───────────────────────────────────────── */
+[data-theme="midnight"],
+[data-theme="tokyo-night"],
+[data-theme="mocha"],
+[data-theme="nord"],
+[data-theme="everforest"],
+[data-theme="rose-pine"] {
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.3);
+  --shadow-md: 0 4px 14px rgba(0,0,0,0.45);
+}
+
+/* ── Midnight（預設深色）─────────────────────────────────── */
+[data-theme="midnight"] {
   --c-canvas: #0b0b0e;
   --c-surface: #141417;
   --c-surface-2: #1e1e23;
@@ -69,9 +80,138 @@
   --c-warning: #d39b2e;  --c-warning-soft: rgba(211,155,46,0.14);
   --c-danger:  #e26a6a;  --c-danger-soft:  rgba(226,106,106,0.14);
   --c-info:    #5aa2e6;  --c-info-soft:    rgba(90,162,230,0.14);
+}
 
-  --shadow-sm: 0 1px 2px rgba(0,0,0,0.3);
-  --shadow-md: 0 4px 14px rgba(0,0,0,0.45);
+/* ── Catppuccin Latte（淺色）────────────────────────────── */
+[data-theme="latte"] {
+  --c-canvas: #eff1f5;
+  --c-surface: #ffffff;
+  --c-surface-2: #e6e9ef;
+  --c-border: #dce0e8;
+  --c-border-strong: #ccd0da;
+  --c-fg: #4c4f69;
+  --c-muted: #6c6f85;
+  --c-subtle: #8c8fa1;
+
+  --c-accent: #8839ef;
+  --c-accent-hover: #7a2fe0;
+  --c-accent-soft: rgba(136,57,239,0.12);
+  --c-on-accent: #ffffff;
+
+  --c-success: #40a02b;  --c-success-soft: rgba(64,160,43,0.12);
+  --c-warning: #df8e1d;  --c-warning-soft: rgba(223,142,29,0.12);
+  --c-danger:  #d20f39;  --c-danger-soft:  rgba(210,15,57,0.12);
+  --c-info:    #1e66f5;  --c-info-soft:    rgba(30,102,245,0.12);
+}
+
+/* ── Tokyo Night（深色）─────────────────────────────────── */
+[data-theme="tokyo-night"] {
+  --c-canvas: #1a1b26;
+  --c-surface: #1f2335;
+  --c-surface-2: #292e42;
+  --c-border: #2f344d;
+  --c-border-strong: #414868;
+  --c-fg: #c0caf5;
+  --c-muted: #a9b1d6;
+  --c-subtle: #565f89;
+
+  --c-accent: #7aa2f7;
+  --c-accent-hover: #8fb3f8;
+  --c-accent-soft: rgba(122,162,247,0.16);
+  --c-on-accent: #16161e;
+
+  --c-success: #9ece6a;  --c-success-soft: rgba(158,206,106,0.14);
+  --c-warning: #e0af68;  --c-warning-soft: rgba(224,175,104,0.14);
+  --c-danger:  #f7768e;  --c-danger-soft:  rgba(247,118,142,0.14);
+  --c-info:    #7dcfff;  --c-info-soft:    rgba(125,207,255,0.14);
+}
+
+/* ── Catppuccin Mocha（深色）────────────────────────────── */
+[data-theme="mocha"] {
+  --c-canvas: #1e1e2e;
+  --c-surface: #28283c;
+  --c-surface-2: #313244;
+  --c-border: #3a3a52;
+  --c-border-strong: #45475a;
+  --c-fg: #cdd6f4;
+  --c-muted: #a6adc8;
+  --c-subtle: #7f849c;
+
+  --c-accent: #cba6f7;
+  --c-accent-hover: #d7bbf9;
+  --c-accent-soft: rgba(203,166,247,0.16);
+  --c-on-accent: #1e1e2e;
+
+  --c-success: #a6e3a1;  --c-success-soft: rgba(166,227,161,0.14);
+  --c-warning: #f9e2af;  --c-warning-soft: rgba(249,226,175,0.14);
+  --c-danger:  #f38ba8;  --c-danger-soft:  rgba(243,139,168,0.14);
+  --c-info:    #89b4fa;  --c-info-soft:    rgba(137,180,250,0.14);
+}
+
+/* ── Nord（深色）────────────────────────────────────────── */
+[data-theme="nord"] {
+  --c-canvas: #2e3440;
+  --c-surface: #353c4a;
+  --c-surface-2: #3b4252;
+  --c-border: #434c5e;
+  --c-border-strong: #4c566a;
+  --c-fg: #eceff4;
+  --c-muted: #d8dee9;
+  --c-subtle: #828b9e;
+
+  --c-accent: #88c0d0;
+  --c-accent-hover: #9fcdd9;
+  --c-accent-soft: rgba(136,192,208,0.16);
+  --c-on-accent: #2e3440;
+
+  --c-success: #a3be8c;  --c-success-soft: rgba(163,190,140,0.14);
+  --c-warning: #ebcb8b;  --c-warning-soft: rgba(235,203,139,0.14);
+  --c-danger:  #bf616a;  --c-danger-soft:  rgba(191,97,106,0.16);
+  --c-info:    #81a1c1;  --c-info-soft:    rgba(129,161,193,0.16);
+}
+
+/* ── Everforest（深色）──────────────────────────────────── */
+[data-theme="everforest"] {
+  --c-canvas: #2d353b;
+  --c-surface: #343f44;
+  --c-surface-2: #3d484d;
+  --c-border: #475258;
+  --c-border-strong: #4f585e;
+  --c-fg: #d3c6aa;
+  --c-muted: #9da9a0;
+  --c-subtle: #7a8478;
+
+  --c-accent: #a7c080;
+  --c-accent-hover: #b8cd96;
+  --c-accent-soft: rgba(167,192,128,0.16);
+  --c-on-accent: #2d353b;
+
+  --c-success: #83c092;  --c-success-soft: rgba(131,192,146,0.14);
+  --c-warning: #dbbc7f;  --c-warning-soft: rgba(219,188,127,0.14);
+  --c-danger:  #e67e80;  --c-danger-soft:  rgba(230,126,128,0.14);
+  --c-info:    #7fbbb3;  --c-info-soft:    rgba(127,187,179,0.14);
+}
+
+/* ── Rosé Pine（深色）───────────────────────────────────── */
+[data-theme="rose-pine"] {
+  --c-canvas: #191724;
+  --c-surface: #1f1d2e;
+  --c-surface-2: #26233a;
+  --c-border: #403d52;
+  --c-border-strong: #524f67;
+  --c-fg: #e0def4;
+  --c-muted: #908caa;
+  --c-subtle: #6e6a86;
+
+  --c-accent: #ebbcba;
+  --c-accent-hover: #f0cbc9;
+  --c-accent-soft: rgba(235,188,186,0.16);
+  --c-on-accent: #191724;
+
+  --c-success: #9ccfd8;  --c-success-soft: rgba(156,207,216,0.14);
+  --c-warning: #f6c177;  --c-warning-soft: rgba(246,193,119,0.14);
+  --c-danger:  #eb6f92;  --c-danger-soft:  rgba(235,111,146,0.16);
+  --c-info:    #c4a7e7;  --c-info-soft:    rgba(196,167,231,0.16);
 }
 
 * { box-sizing: border-box; }

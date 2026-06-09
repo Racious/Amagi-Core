@@ -34,11 +34,11 @@
 
       <!-- 頁尾：主題切換 + 版本 -->
       <div class="px-2.5 py-2.5 border-t border-border flex items-center justify-between">
-        <button class="btn btn-ghost btn-sm" @click="toggle" :title="theme === 'dark' ? '切換為淺色' : '切換為深色'">
-          <span>{{ theme === 'dark' ? '🌙' : '☀️' }}</span>
-          <span>{{ theme === 'dark' ? '深色' : '淺色' }}</span>
+        <button class="btn btn-ghost btn-sm" @click="toggle" :title="activeBase === 'dark' ? '切換為淺色' : '切換為深色'">
+          <span>{{ activeBase === 'dark' ? '🌙' : '☀️' }}</span>
+          <span>{{ activeBase === 'dark' ? '深色' : '淺色' }}</span>
         </button>
-        <span class="text-[11px] text-subtle pr-1">v0.1.0</span>
+        <span class="text-[11px] text-subtle pr-1">v{{ appVersion }}</span>
       </div>
     </aside>
 
@@ -64,7 +64,8 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { onMounted, ref } from 'vue'
+import { getVersion } from '@tauri-apps/api/app'
 import { RouterLink, RouterView } from 'vue-router'
 import { useReviewStore } from './stores/reviewStore'
 import { useProjectStore } from './stores/projectStore'
@@ -73,7 +74,9 @@ import { useUpdater } from './composables/useUpdater'
 
 const reviewStore = useReviewStore()
 const projectStore = useProjectStore()
-const { theme, toggle } = useTheme()
+const { activeBase, toggle } = useTheme()
+
+const appVersion = ref('0.1.0')
 const { status: updateStatus, newVersion, progress, checkForUpdate, installUpdate, dismiss } = useUpdater()
 
 const navGroups = [
@@ -105,6 +108,7 @@ const navGroups = [
 ]
 
 onMounted(async () => {
+  try { appVersion.value = await getVersion() } catch { /* 非 Tauri 環境 */ }
   await projectStore.fetchProjects()
   await reviewStore.fetchItems()
   // 啟動時靜默檢查更新（失敗不打擾；有新版才顯示橫幅）

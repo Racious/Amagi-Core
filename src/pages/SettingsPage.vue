@@ -5,19 +5,59 @@
       <p class="page-sub">調整 AMAGI Core 的外觀、通知模式與行為</p>
     </div>
 
-    <!-- 外觀 -->
+    <!-- 外觀主題 -->
     <div class="card p-5 mb-4">
       <div class="font-semibold text-sm mb-3 text-fg">外觀主題</div>
+
+      <!-- 跟隨系統 -->
+      <button
+        class="w-full flex items-center gap-3 p-3 rounded-lg border text-left transition-colors mb-3"
+        :class="pref === 'system' ? 'border-accent' : 'border-border'"
+        :style="pref === 'system' ? 'background: var(--c-accent-soft);' : 'background: var(--c-surface-2);'"
+        @click="set('system')"
+      >
+        <span class="text-lg">🖥️</span>
+        <div>
+          <div class="text-sm font-medium text-fg">跟隨系統</div>
+          <div class="text-xs text-muted">依作業系統的明暗設定自動切換</div>
+        </div>
+      </button>
+
+      <!-- 淺色 -->
+      <div class="text-[11px] font-semibold uppercase tracking-wider mb-1.5" style="color: var(--c-subtle);">淺色</div>
+      <div class="grid grid-cols-2 gap-2 mb-3">
+        <button
+          v-for="t in lightThemes" :key="t.id"
+          class="flex items-center gap-2.5 p-2.5 rounded-lg border text-left transition-colors"
+          :class="pref === t.id ? 'border-accent' : 'border-border'"
+          :style="pref === t.id ? 'background: var(--c-accent-soft);' : 'background: var(--c-surface-2);'"
+          @click="set(t.id)"
+        >
+          <span class="flex rounded-md overflow-hidden border border-border flex-shrink-0" style="width: 38px; height: 26px;">
+            <span class="flex-1" :style="{ background: t.swatch.bg }"></span>
+            <span class="flex-1" :style="{ background: t.swatch.surface }"></span>
+            <span class="flex-1" :style="{ background: t.swatch.accent }"></span>
+          </span>
+          <span class="text-sm font-medium text-fg leading-tight">{{ t.label }}</span>
+        </button>
+      </div>
+
+      <!-- 深色 -->
+      <div class="text-[11px] font-semibold uppercase tracking-wider mb-1.5" style="color: var(--c-subtle);">深色</div>
       <div class="grid grid-cols-2 gap-2">
         <button
-          v-for="opt in themeOptions" :key="opt.value"
-          class="flex items-center gap-3 p-3 rounded-lg border text-left transition-colors"
-          :class="theme === opt.value ? 'border-accent' : 'border-border'"
-          :style="theme === opt.value ? 'background: var(--c-accent-soft);' : 'background: var(--c-surface-2);'"
-          @click="set(opt.value)"
+          v-for="t in darkThemes" :key="t.id"
+          class="flex items-center gap-2.5 p-2.5 rounded-lg border text-left transition-colors"
+          :class="pref === t.id ? 'border-accent' : 'border-border'"
+          :style="pref === t.id ? 'background: var(--c-accent-soft);' : 'background: var(--c-surface-2);'"
+          @click="set(t.id)"
         >
-          <span class="text-lg">{{ opt.icon }}</span>
-          <span class="text-sm font-medium text-fg">{{ opt.label }}</span>
+          <span class="flex rounded-md overflow-hidden border border-border flex-shrink-0" style="width: 38px; height: 26px;">
+            <span class="flex-1" :style="{ background: t.swatch.bg }"></span>
+            <span class="flex-1" :style="{ background: t.swatch.surface }"></span>
+            <span class="flex-1" :style="{ background: t.swatch.accent }"></span>
+          </span>
+          <span class="text-sm font-medium text-fg leading-tight">{{ t.label }}</span>
         </button>
       </div>
     </div>
@@ -71,11 +111,11 @@
 import { ref, computed, onMounted } from 'vue'
 import { getVersion } from '@tauri-apps/api/app'
 import { useSettingsStore } from '../stores/settingsStore'
-import { useTheme, type Theme } from '../composables/useTheme'
+import { useTheme, THEMES } from '../composables/useTheme'
 import { useUpdater } from '../composables/useUpdater'
 
 const settingsStore = useSettingsStore()
-const { theme, set } = useTheme()
+const { pref, set } = useTheme()
 const { status: updateStatus, newVersion, errorMsg, progress, checkForUpdate, installUpdate } = useUpdater()
 
 const appVersion = ref('—')
@@ -93,10 +133,8 @@ const updateText = computed(() => {
   }
 })
 
-const themeOptions: { value: Theme; label: string; icon: string }[] = [
-  { value: 'light', label: '淺色', icon: '☀️' },
-  { value: 'dark', label: '深色', icon: '🌙' },
-]
+const lightThemes = THEMES.filter((t) => t.base === 'light')
+const darkThemes = THEMES.filter((t) => t.base === 'dark')
 
 const modes = [
   { value: 'quiet', label: '低干擾模式', desc: '只在系統匣顯示待審核數，不立即彈窗。適合日常開發。' },
