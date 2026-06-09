@@ -32,8 +32,15 @@ const pngTargets = {
 };
 
 // 以 sharp 高品質縮放產生指定尺寸 PNG buffer（Tauri 要求 RGBA）
-const pngBuffer = (size) =>
-  sharp(SRC).resize(size, size, { fit: 'cover' }).ensureAlpha().png().toBuffer();
+// 小尺寸（<=64px）補「僅邊緣鋭化」：m1=0 平坦區不動（不放大深色背景雜訊），
+// m2=2 鋭化邊緣（拿回清晰度）。比預設 .sharpen() 乾淨——預設會連平坦區一起鋭化而放大噪點。
+// 大尺寸保持平滑，避免發光／漸層被鋭化得顯髒。
+const SHARPEN_MAX = 64;
+const pngBuffer = (size) => {
+  let p = sharp(SRC).resize(size, size, { fit: 'cover' });
+  if (size <= SHARPEN_MAX) p = p.sharpen({ sigma: 1, m1: 0, m2: 2 });
+  return p.ensureAlpha().png().toBuffer();
+};
 
 for (const [name, size] of Object.entries(pngTargets)) {
   writeFileSync(join(ICONS, name), await pngBuffer(size));

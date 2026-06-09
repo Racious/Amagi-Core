@@ -19,6 +19,11 @@ dist-ssr
 release-body.md
 AMAGI_Core_*_portable.exe
 
+# Tauri 更新簽章私鑰與密碼（絕不可進版控！外洩將能被冒簽惡意更新）
+/src-tauri/updater-keys/
+*.key
+.env.signing
+
 # 圖標設計探索資產（僅留本機，不納版控）
 /public/icon-concepts/
 /public/amagi-core-icon-16.png
