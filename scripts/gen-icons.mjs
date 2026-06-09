@@ -1,22 +1,17 @@
 // 產生 Amagi-Core 全套應用圖標
-// 策略：尺寸 < 96px 採用 Minimal A（小尺寸清晰），>= 96px 採用 Bright Core（大圖門面）
-// .ico（Windows，主要顯示於標題列/檔案總管小圖）整顆用 Minimal A
-// .icns（macOS Dock 大圖）用 Bright Core
+// 來源：public/amagi-core-icon-rounded.png（深底圓角，黑角已透明）
+// PNG 各尺寸與 .ico 皆以 sharp 高品質縮放；.ico 用 png-to-ico 組裝（不再二次縮放失真）
 import sharp from 'sharp';
 import png2icons from 'png2icons';
-import { readFileSync, writeFileSync } from 'node:fs';
+import pngToIco from 'png-to-ico';
+import { writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-// 全尺寸統一使用深底 concept 圓角版（黑色四角已去透明）
-const SRC_BRIGHT = join(root, 'public/amagi-core-icon-rounded.png');
-const SRC_MINIMAL = join(root, 'public/amagi-core-icon-rounded.png');
+const SRC = join(root, 'public/amagi-core-icon-rounded.png');
 const ICONS = join(root, 'src-tauri/icons');
 const PUBLIC = join(root, 'public');
-
-const SMALL_THRESHOLD = 96;
-const pick = (size) => (size < SMALL_THRESHOLD ? SRC_MINIMAL : SRC_BRIGHT);
 
 // 尺寸對照的 PNG 檔案（檔名 -> 邊長）
 const pngTargets = {
@@ -36,37 +31,31 @@ const pngTargets = {
   'StoreLogo.png': 50,
 };
 
-async function resize(src, size, out) {
-  await sharp(src)
-    .resize(size, size, { fit: 'cover' })
-    .ensureAlpha() // Tauri 要求 icon 必須為 RGBA
-    .png()
-    .toFile(out);
-}
+// 以 sharp 高品質縮放產生指定尺寸 PNG buffer（Tauri 要求 RGBA）
+const pngBuffer = (size) =>
+  sharp(SRC).resize(size, size, { fit: 'cover' }).ensureAlpha().png().toBuffer();
 
 for (const [name, size] of Object.entries(pngTargets)) {
-  const src = pick(size);
-  const tag = src === SRC_MINIMAL ? 'Minimal A' : 'Bright Core';
-  await resize(src, size, join(ICONS, name));
-  console.log(`PNG  ${name.padEnd(22)} ${String(size).padStart(4)}px  <- ${tag}`);
+  writeFileSync(join(ICONS, name), await pngBuffer(size));
+  console.log(`PNG  ${name.padEnd(22)} ${String(size).padStart(4)}px`);
 }
 
-// .ico（Windows）：Minimal A，含多尺寸
-const minimalBuf = await sharp(SRC_MINIMAL).resize(1024, 1024).ensureAlpha().png().toBuffer();
-const ico = png2icons.createICO(minimalBuf, png2icons.BICUBIC2, 0, false);
-writeFileSync(join(ICONS, 'icon.ico'), ico);
-console.log('ICO  icon.ico              multi   <- Minimal A');
+// .ico（Windows）：sharp 產各尺寸 -> png-to-ico 組裝，避免 png2icons 小尺寸雜點
+const ICO_SIZES = [16, 24, 32, 48, 64, 128, 256];
+const icoBuffers = await Promise.all(ICO_SIZES.map(pngBuffer));
+writeFileSync(join(ICONS, 'icon.ico'), await pngToIco(icoBuffers));
+console.log(`ICO  icon.ico              [${ICO_SIZES.join(',')}]`);
 
-// .icns（macOS）：Bright Core
-const brightBuf = await sharp(SRC_BRIGHT).resize(1024, 1024).ensureAlpha().png().toBuffer();
-const icns = png2icons.createICNS(brightBuf, png2icons.BICUBIC2, 0);
-writeFileSync(join(ICONS, 'icon.icns'), icns);
-console.log('ICNS icon.icns             multi   <- Bright Core');
+// .icns（macOS）：png2icons（大尺寸為主，Windows 不使用）
+const bigBuf = await sharp(SRC).resize(1024, 1024).ensureAlpha().png().toBuffer();
+writeFileSync(join(ICONS, 'icon.icns'), png2icons.createICNS(bigBuf, png2icons.BICUBIC2, 0));
+console.log('ICNS icon.icns             multi');
 
-// favicon（瀏覽器分頁，小尺寸）：Minimal A
-const favIco = png2icons.createICO(minimalBuf, png2icons.BICUBIC2, 0, false);
-writeFileSync(join(PUBLIC, 'favicon.ico'), favIco);
-await resize(SRC_MINIMAL, 32, join(PUBLIC, 'favicon.png'));
-console.log('FAV  favicon.ico/.png      <- Minimal A');
+// favicon（瀏覽器分頁）：sharp + png-to-ico
+const FAV_SIZES = [16, 32, 48];
+const favBuffers = await Promise.all(FAV_SIZES.map(pngBuffer));
+writeFileSync(join(PUBLIC, 'favicon.ico'), await pngToIco(favBuffers));
+writeFileSync(join(PUBLIC, 'favicon.png'), await pngBuffer(32));
+console.log(`FAV  favicon.ico/.png      [${FAV_SIZES.join(',')}]`);
 
 console.log('\n完成。');
