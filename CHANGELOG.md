@@ -2,6 +2,18 @@
 
 AMAGI Core 的所有重要變更記錄於此。版本遵循語意化版號（major.minor.patch）。
 
+## v0.1.5
+
+多主題系統與差異匯出修復。
+
+### 功能
+- **多主題**：新增 8 套專業配色——淺色 Daylight／Catppuccin Latte，深色 Midnight／Tokyo Night／Catppuccin Mocha／Nord／Everforest／Rosé Pine——並支援「跟隨系統」。設定頁改為主題畫廊，每套附色板預覽，切換即時換膚；相容舊版明暗設定。
+
+### 修正
+- **差異匯出**：修正未追蹤目錄（如 `uploads/`）被 git 折疊成單一項、進而誤報「讀取失敗」並略過的問題。改用 `git status --porcelain -uall` 展開目錄內實際檔案，並對目錄路徑加防呆。
+- 修正頁尾版本號寫死為舊值，改用 `getVersion()` 動態顯示。
+- 修正主題卡長名（Catppuccin…）在窄容器被裁切。
+
 ## v0.1.4
 
 圖標小尺寸鋭化優化。
