@@ -38,7 +38,7 @@
             <span class="flex-1" :style="{ background: t.swatch.surface }"></span>
             <span class="flex-1" :style="{ background: t.swatch.accent }"></span>
           </span>
-          <span class="text-sm font-medium text-fg leading-tight">{{ t.label }}</span>
+          <span class="text-sm font-medium text-fg leading-tight min-w-0 break-words">{{ t.label }}</span>
         </button>
       </div>
 
@@ -57,7 +57,7 @@
             <span class="flex-1" :style="{ background: t.swatch.surface }"></span>
             <span class="flex-1" :style="{ background: t.swatch.accent }"></span>
           </span>
-          <span class="text-sm font-medium text-fg leading-tight">{{ t.label }}</span>
+          <span class="text-sm font-medium text-fg leading-tight min-w-0 break-words">{{ t.label }}</span>
         </button>
       </div>
     </div>
