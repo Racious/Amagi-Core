@@ -4,6 +4,7 @@ use crate::models::sync::ScanResult;
 const ALLOWED_ARGS: &[&[&str]] = &[
     &["status", "--short"],
     &["status", "--porcelain"],
+    &["status", "--porcelain", "-uall"],
     &["diff", "--stat"],
     &["diff"],
     &["log", "-5", "--oneline"],
@@ -95,7 +96,8 @@ fn parse_changed_files(diff_stat: &str) -> Vec<String> {
 
 /// `git status --porcelain` 原始輸出（供解析異動檔清單）
 pub fn status_porcelain(project_path: &str) -> Result<String, AppError> {
-    run_git(project_path, &["status", "--porcelain"])
+    // -uall：展開未追蹤目錄內的實際檔案，避免整個資料夾被折疊成單一目錄項（如 `uploads/`）
+    run_git(project_path, &["status", "--porcelain", "-uall"])
 }
 
 /// 取得 HEAD 的完整 SHA；若無任何 commit 則回傳 None

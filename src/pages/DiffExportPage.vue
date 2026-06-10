@@ -57,7 +57,7 @@
 
     <!-- 略過 / 截斷提示 -->
     <div v-if="bundle && bundle.skipped.length" class="alert tone-warning mb-4">
-      <div class="font-semibold text-sm mb-1">略過 {{ bundle.skipped.length }} 個檔案（二進位／過大）</div>
+      <div class="font-semibold text-sm mb-1">略過 {{ bundle.skipped.length }} 個檔案</div>
       <div v-for="s in bundle.skipped" :key="s" class="text-xs mt-0.5" style="color: var(--c-warning);">{{ s }}</div>
     </div>
     <div v-if="bundle && bundle.truncated" class="alert tone-warning mb-4">

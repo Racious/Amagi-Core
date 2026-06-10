@@ -179,6 +179,10 @@ enum Synth {
 /// 自合成新檔的「整排 +」patch（不呼叫 git）
 fn synthesize_new_file(project_path: &str, rel_path: &str, ms: u128) -> Synth {
     let full = Path::new(project_path).join(rel_path);
+    // 防呆：路徑為目錄時（理論上 -uall 已展開，仍保險）明確標示，不誤報「讀取失敗」
+    if full.is_dir() {
+        return Synth::Skip("目錄（未展開）".into());
+    }
     let bytes = match std::fs::read(&full) {
         Ok(b) => b,
         Err(_) => return Synth::Skip("讀取失敗".into()),
