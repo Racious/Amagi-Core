@@ -272,6 +272,16 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_porcelain_utf8_path() {
+        // core.quotePath=false 下，中文檔名直接以 UTF-8 輸出（不轉義、不加引號）
+        let raw = "?? uploads/qa-documents/稽核日誌_是方端.txt\n";
+        let files = parse_porcelain(raw);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, "uploads/qa-documents/稽核日誌_是方端.txt");
+        assert_eq!(files[0].status, ChangedStatus::Untracked);
+    }
+
+    #[test]
     fn test_staged_flag() {
         let files = parse_porcelain("M  staged.ts\n M unstaged.ts\n?? new.ts\n");
         let find = |p: &str| files.iter().find(|f| f.path == p).unwrap();

@@ -13,6 +13,7 @@
           <option value="">— 請選擇 —</option>
           <option v-for="p in projectStore.projects" :key="p.id" :value="p.id">{{ p.name }}</option>
         </select>
+        <button @click="openDir" :disabled="!selectedId" class="btn btn-ghost" title="用檔案總管開啟專案目錄">📂 開啟目錄</button>
         <button @click="scan" :disabled="!selectedId || loading" class="btn btn-ghost">掃描異動</button>
         <button @click="generate" :disabled="!selectedId || loading || selectedPaths.length === 0" class="btn btn-primary">
           產生 Diff（{{ selectedPaths.length }}）
@@ -40,6 +41,7 @@
             <input type="checkbox" v-model="checked[f.path]" />
             <span class="pill" :class="statusTone(f.status)">{{ statusLabel(f.status) }}</span>
             <span class="text-xs text-fg truncate flex-1" :title="f.path">{{ f.path }}</span>
+            <button class="text-xs px-1 opacity-50 hover:opacity-100 flex-shrink-0" title="在檔案總管中顯示" @click.stop.prevent="reveal(f.path)">📂</button>
           </label>
         </div>
       </div>
@@ -173,6 +175,24 @@ async function generate() {
     error.value = e?.message ?? String(e)
   } finally {
     loading.value = false
+  }
+}
+
+async function openDir() {
+  if (!selectedId.value) return
+  try {
+    await api.revealInExplorer(selectedId.value)
+  } catch (e: any) {
+    error.value = e?.message ?? String(e)
+  }
+}
+
+async function reveal(path: string) {
+  if (!selectedId.value) return
+  try {
+    await api.revealInExplorer(selectedId.value, path)
+  } catch (e: any) {
+    error.value = e?.message ?? String(e)
   }
 }
 

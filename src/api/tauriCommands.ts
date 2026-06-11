@@ -190,6 +190,8 @@ export const api = {
   listChangedFiles: (projectId: string) => invoke<ChangedFile[]>('list_changed_files', { projectId }),
   generateDiffText: (projectId: string, paths: string[]) =>
     invoke<DiffBundle>('generate_diff_text', { projectId, paths }),
+  revealInExplorer: (projectId: string, relPath?: string) =>
+    invoke<void>('reveal_in_explorer', { projectId, relPath: relPath ?? null }),
 
   // ── Workflow 指令 ──────────────────────────────
   scanProjectWorkflows: (projectId: string) =>

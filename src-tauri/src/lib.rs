@@ -89,6 +89,7 @@ pub fn run() {
             scan_project,
             list_changed_files,
             generate_diff_text,
+            reveal_in_explorer,
             learn_from_project,
             list_review_items,
             accept_review_items,

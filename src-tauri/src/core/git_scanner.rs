@@ -5,6 +5,7 @@ const ALLOWED_ARGS: &[&[&str]] = &[
     &["status", "--short"],
     &["status", "--porcelain"],
     &["status", "--porcelain", "-uall"],
+    &["-c", "core.quotePath=false", "status", "--porcelain", "-uall"],
     &["diff", "--stat"],
     &["diff"],
     &["log", "-5", "--oneline"],
@@ -97,7 +98,8 @@ fn parse_changed_files(diff_stat: &str) -> Vec<String> {
 /// `git status --porcelain` 原始輸出（供解析異動檔清單）
 pub fn status_porcelain(project_path: &str) -> Result<String, AppError> {
     // -uall：展開未追蹤目錄內的實際檔案，避免整個資料夾被折疊成單一目錄項（如 `uploads/`）
-    run_git(project_path, &["status", "--porcelain", "-uall"])
+    // core.quotePath=false：非 ASCII 檔名（中文）直接輸出 UTF-8，不做八進位轉義，避免後續讀檔失敗
+    run_git(project_path, &["-c", "core.quotePath=false", "status", "--porcelain", "-uall"])
 }
 
 /// 取得 HEAD 的完整 SHA；若無任何 commit 則回傳 None
@@ -126,7 +128,8 @@ pub fn validate_rel_path(p: &str) -> Result<(), AppError> {
 /// 僅建構 `diff HEAD --` + 經驗證的路徑，維持唯讀、不動 index。
 pub fn diff_one(project_path: &str, rel_path: &str) -> Result<String, AppError> {
     validate_rel_path(rel_path)?;
-    let args = ["diff", "HEAD", "--", rel_path];
+    // core.quotePath=false：中文檔名的 diff 表頭也輸出真實 UTF-8
+    let args = ["-c", "core.quotePath=false", "diff", "HEAD", "--", rel_path];
     let output = crate::utils::proc::command("git")
         .args(args)
         .current_dir(project_path)

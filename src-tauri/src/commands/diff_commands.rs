@@ -1,3 +1,4 @@
+use std::path::Path;
 use tauri::State;
 use crate::{AppError, AppState};
 use crate::models::diff::{ChangedFile, DiffBundle};
@@ -26,4 +27,46 @@ pub async fn generate_diff_text(
     let project = project_manager::get_project(&project_id, &data_dir)
         .ok_or_else(|| AppError::ProjectNotFound(project_id.clone()))?;
     diff_export::generate_diff_text(&project.path, &paths)
+}
+
+/// 用檔案總管開啟專案目錄；給 rel_path 則定位並選中該檔（對非 ASCII 檔名亦適用）
+#[tauri::command]
+pub async fn reveal_in_explorer(
+    project_id: String,
+    rel_path: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<(), AppError> {
+    let data_dir = state.data_dir.clone();
+    let project = project_manager::get_project(&project_id, &data_dir)
+        .ok_or_else(|| AppError::ProjectNotFound(project_id.clone()))?;
+
+    let target = match rel_path.as_deref() {
+        Some(rel) => {
+            // 沿用差異匯出的相對路徑安全驗證（防跳脫／絕對路徑／旗標注入）
+            crate::core::git_scanner::validate_rel_path(rel)?;
+            Path::new(&project.path).join(rel)
+        }
+        None => Path::new(&project.path).to_path_buf(),
+    };
+    if !target.exists() {
+        return Err(AppError::InvalidPath(format!("路徑不存在：{}", target.display())));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let mut cmd = crate::utils::proc::command("explorer");
+        if rel_path.is_some() {
+            // /select,<path>：開啟父目錄並選中該檔
+            cmd.arg(format!("/select,{}", target.display()));
+        } else {
+            cmd.arg(target.as_os_str());
+        }
+        // explorer 即使成功也常回傳非 0 退出碼，故只 spawn 不檢查狀態
+        cmd.spawn().map_err(|e| AppError::Io(e.to_string()))?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = target; // 非 Windows 平台暫不支援
+    }
+    Ok(())
 }
