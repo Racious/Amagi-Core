@@ -41,6 +41,25 @@ pub struct AppState {
     pub data_dir: PathBuf,
 }
 
+/// 清理 %TEMP% 中本 app 殘留的更新安裝包（NSIS：「AMAGI Core-<版本>-installer.exe」）。
+/// App 能啟動即代表上次更新已完成，這些殘留皆可安全刪除；刪不掉也忽略，下次啟動再試。
+fn cleanup_update_residue() {
+    cleanup_residue_in(&std::env::temp_dir());
+}
+
+/// 刪除指定目錄中符合更新安裝包命名的檔案（核心邏輯，便於測試）。
+fn cleanup_residue_in(dir: &std::path::Path) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with("AMAGI Core-") && name.ends_with("-installer.exe") {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let data_dir = utils::fs_utils::app_data_dir()
@@ -66,6 +85,9 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState { data_dir })
         .setup(|app| {
+            // 背景清理上次更新殘留的安裝包（不阻塞啟動）
+            std::thread::spawn(cleanup_update_residue);
+
             core::tray::setup_tray(app.handle())?;
 
             let window = app.get_webview_window("main").unwrap();
@@ -108,4 +130,28 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("AMAGI Core 啟動失敗");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cleanup_residue_in() {
+        let dir = std::env::temp_dir().join(format!("amagi-cleanup-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("AMAGI Core-0.1.5-installer.exe"), b"x").unwrap();
+        std::fs::write(dir.join("AMAGI Core-0.1.6-installer.exe"), b"x").unwrap();
+        std::fs::write(dir.join("other-installer.exe"), b"x").unwrap(); // 不該刪
+        std::fs::write(dir.join("AMAGI Core-notes.txt"), b"x").unwrap(); // 不該刪
+
+        cleanup_residue_in(&dir);
+
+        assert!(!dir.join("AMAGI Core-0.1.5-installer.exe").exists());
+        assert!(!dir.join("AMAGI Core-0.1.6-installer.exe").exists());
+        assert!(dir.join("other-installer.exe").exists());
+        assert!(dir.join("AMAGI Core-notes.txt").exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
