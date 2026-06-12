@@ -54,12 +54,14 @@ pub async fn reveal_in_explorer(
 
     #[cfg(target_os = "windows")]
     {
+        // explorer 只認反斜線；git 相對路徑用正斜線，混合分隔符會讓 /select 找不到檔，需統一轉換
+        let path_str = target.to_string_lossy().replace('/', "\\");
         let mut cmd = crate::utils::proc::command("explorer");
         if rel_path.is_some() {
             // /select,<path>：開啟父目錄並選中該檔
-            cmd.arg(format!("/select,{}", target.display()));
+            cmd.arg(format!("/select,{}", path_str));
         } else {
-            cmd.arg(target.as_os_str());
+            cmd.arg(&path_str);
         }
         // explorer 即使成功也常回傳非 0 退出碼，故只 spawn 不檢查狀態
         cmd.spawn().map_err(|e| AppError::Io(e.to_string()))?;
