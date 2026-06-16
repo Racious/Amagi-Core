@@ -54,14 +54,18 @@ pub async fn reveal_in_explorer(
 
     #[cfg(target_os = "windows")]
     {
-        // explorer 只認反斜線；git 相對路徑用正斜線，混合分隔符會讓 /select 找不到檔，需統一轉換
+        use std::os::windows::process::CommandExt;
+        // explorer 只認反斜線；git 相對路徑用正斜線，混合分隔符會讓 /select 找不到檔
         let path_str = target.to_string_lossy().replace('/', "\\");
-        let mut cmd = crate::utils::proc::command("explorer");
+        // 用一般 Command：不加 CREATE_NO_WINDOW（explorer 是 GUI，本就不閃主控台，
+        // 該旗標反而會干擾它開窗）。
+        let mut cmd = std::process::Command::new("explorer");
+        // raw_arg 自行控制引號：/select, 之後的路徑要「單獨」加引號，否則含空格路徑
+        // 會被 Rust 整段包成一組引號，explorer 解析失敗、定位不到檔。
         if rel_path.is_some() {
-            // /select,<path>：開啟父目錄並選中該檔
-            cmd.arg(format!("/select,{}", path_str));
+            cmd.raw_arg(format!("/select,\"{}\"", path_str));
         } else {
-            cmd.arg(&path_str);
+            cmd.raw_arg(format!("\"{}\"", path_str));
         }
         // explorer 即使成功也常回傳非 0 退出碼，故只 spawn 不檢查狀態
         cmd.spawn().map_err(|e| AppError::Io(e.to_string()))?;
