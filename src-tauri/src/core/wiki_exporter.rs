@@ -71,12 +71,18 @@ pub fn write_wiki_pages(vault_root: &Path, items: &[ReviewItem]) -> Result<WikiW
 pub fn build_wiki_md(item: &ReviewItem, category: &str) -> String {
     let id = format!("wiki-{}", &uuid::Uuid::new_v4().to_string()[..8]);
     let date = Utc::now().format("%Y-%m-%d");
+    // 若萃取自原始來源，frontmatter 回指出處（adr-002 D9）
+    let source_line = match &item.source_pending_file {
+        Some(s) if !s.is_empty() => format!("source: {s}\n"),
+        _ => String::new(),
+    };
     format!(
-        "---\nid: {id}\ntitle: {title}\ntype: {ty}\nstatus: active\nconfidence: medium\nsalience: 5\ntags: []\nlast_updated: {date}\nprotected: false\n---\n\n# {title}\n\n{content}\n",
+        "---\nid: {id}\ntitle: {title}\ntype: {ty}\nstatus: active\nconfidence: medium\nsalience: 5\ntags: []\nlast_updated: {date}\n{source}protected: false\n---\n\n# {title}\n\n{content}\n",
         id = id,
         title = item.title,
         ty = category,
         date = date,
+        source = source_line,
         content = item.content
     )
 }

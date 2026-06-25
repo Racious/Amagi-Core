@@ -256,5 +256,7 @@ export const api = {
 
   // ── 知識匯入（Wiki）──────────────────────────────
   ingestWikiPage: (input: WikiIngestInput) => invoke<ReviewItem>('ingest_wiki_page', { ...input }),
+  ingestWikiFromFile: (input: { projectId: string; layer: string; pageType: string; filePath: string }) =>
+    invoke<ReviewItem>('ingest_wiki_from_file', { ...input }),
   writeWikiPages: (ids: string[]) => invoke<WikiWriteResult>('write_wiki_pages', { ids }),
 }

@@ -133,6 +133,7 @@ pub fn run() {
             get_vault_config,
             init_project_vault,
             ingest_wiki_page,
+            ingest_wiki_from_file,
             write_wiki_pages,
         ])
         .run(tauri::generate_context!())

@@ -40,9 +40,14 @@
         <textarea v-model="form.content" rows="8" :class="inputClass + ' font-mono'" :style="inputStyle"
                   placeholder="貼上內容…"></textarea>
       </label>
-      <button class="btn btn-primary btn-sm" :disabled="busy || !form.title.trim()" @click="createDraft">
-        {{ busy ? '建立中…' : '建立草稿' }}
-      </button>
+      <div class="flex gap-2">
+        <button class="btn btn-primary btn-sm" :disabled="busy || !form.title.trim()" @click="createDraft">
+          {{ busy ? '建立中…' : '建立草稿' }}
+        </button>
+        <button class="btn btn-ghost btn-sm" :disabled="busy" @click="importFromFile">
+          從檔案匯入…
+        </button>
+      </div>
     </div>
 
     <!-- 待審核 wiki 草稿 -->
@@ -87,6 +92,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { open } from '@tauri-apps/plugin-dialog'
 import { api, type ProjectInfo, type ReviewItem } from '../api/tauriCommands'
 
 const inputClass = 'w-full mt-1 px-2.5 py-1.5 rounded-md border border-border text-sm text-fg'
@@ -150,6 +156,29 @@ async function createDraft() {
     successMsg.value = `已建立草稿「${form.value.title}」，待審核。`
     form.value.title = ''
     form.value.content = ''
+    await refresh()
+  } catch (e: any) { error.value = e?.message ?? String(e) }
+  finally { busy.value = false }
+}
+
+async function importFromFile() {
+  clearMsg()
+  const picked = await open({
+    directory: false,
+    multiple: false,
+    title: '選擇要匯入的檔案',
+    filters: [{ name: 'Markdown / 文字', extensions: ['md', 'markdown', 'txt'] }],
+  })
+  if (typeof picked !== 'string') return
+  busy.value = true
+  try {
+    const item = await api.ingestWikiFromFile({
+      projectId: form.value.projectId,
+      layer: form.value.layer,
+      pageType: form.value.pageType,
+      filePath: picked,
+    })
+    successMsg.value = `已從檔案建立草稿「${item.title}」，原始來源已存入 sources/。`
     await refresh()
   } catch (e: any) { error.value = e?.message ?? String(e) }
   finally { busy.value = false }

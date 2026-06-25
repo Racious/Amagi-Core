@@ -55,6 +55,71 @@ pub async fn ingest_wiki_page(
     Ok(item)
 }
 
+/// 從檔案匯入知識：讀檔 → 保存原始來源到 vault sources/imported/ → 建草稿進佇列。
+#[tauri::command]
+pub async fn ingest_wiki_from_file(
+    project_id: String,
+    layer: String,
+    page_type: String,
+    file_path: String,
+    state: State<'_, AppState>,
+) -> Result<ReviewItem, AppError> {
+    let content = std::fs::read_to_string(&file_path)
+        .map_err(|e| AppError::Io(format!("讀取檔案失敗：{e}")))?;
+
+    let safety = safety_filter::check(&content);
+    if !safety.is_safe {
+        let labels: Vec<String> = safety.hits.iter().map(|h| h.label.clone()).collect();
+        return Err(AppError::SafetyBlocked(format!(
+            "內容疑似含敏感資訊：{}",
+            labels.join("、")
+        )));
+    }
+
+    let p = Path::new(&file_path);
+    let file_name = p
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("imported.md")
+        .to_string();
+    let title = p
+        .file_stem()
+        .and_then(|n| n.to_str())
+        .unwrap_or("imported")
+        .to_string();
+
+    // 保存原始來源到 vault sources/imported/（非破壞：已存在則沿用）
+    let cfg = vault_manager::get_vault_config(&state.data_dir);
+    let mut source_ref = None;
+    if let Some(ref vault_root) = cfg.vault_path {
+        let src_dir = Path::new(vault_root).join("sources").join("imported");
+        std::fs::create_dir_all(&src_dir).map_err(|e| AppError::Io(e.to_string()))?;
+        let dest = src_dir.join(&file_name);
+        if !dest.exists() {
+            std::fs::copy(&file_path, &dest).map_err(|e| AppError::Io(e.to_string()))?;
+        }
+        source_ref = Some(format!("sources/imported/{file_name}"));
+    }
+
+    let item = ReviewItem {
+        id: Uuid::new_v4().to_string(),
+        project_id,
+        item_type: ReviewItemType::Wiki,
+        category: page_type,
+        title,
+        content,
+        risk: RiskLevel::Low,
+        status: ReviewStatus::Pending,
+        sync_targets: vec![layer],
+        sync_scope: SyncScope::Project,
+        source_pending_file: source_ref,
+        created_at: Utc::now(),
+        reviewed_at: None,
+    };
+    review_queue::add_items(&state.data_dir, vec![item.clone()])?;
+    Ok(item)
+}
+
 /// 接受指定的 wiki 候選並寫入 vault；成功者標記為 Synced。
 #[tauri::command]
 pub async fn write_wiki_pages(

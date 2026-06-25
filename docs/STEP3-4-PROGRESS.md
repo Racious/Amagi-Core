@@ -19,11 +19,12 @@
 - 前端：新 `IngestPage`（/ingest「知識匯入」）+ 導覽列；`ReviewQueuePage`/`reviewStore` 排除 wiki 型別避免衝突。
 - 測試：wiki_exporter 3 項；全 Rust 測試通過、vue-tsc 綠燈。
 
-## 待辦（依序）
+### Step 3b — 檔案匯入 + 原始來源保存 ✅
+- `ingest_wiki_from_file`：讀檔 → 存原文到 vault `sources/imported/` → 建草稿，source 回指。
+- `build_wiki_md` 依 `source_pending_file` 輸出 `source:` frontmatter。
+- 前端：IngestPage「從檔案匯入…」按鈕（檔案選擇器）。
 
-### Step 3b — ingest 來源擴充
-- 從「檔案路徑」匯入（讀檔 → 草稿），對應 vault `sources/clips/` 慣例。
-- ingest 時保留原始來源到 vault `sources/`，正式頁 frontmatter 加 `source:` 回指。
+## 待辦（依序）
 
 ### Step 3c — sources/clips 自動監看 + 分類器
 - 掃 vault `sources/clips/*.md`（Web Clipper 落點）→ 自動產 wiki 候選進佇列。
