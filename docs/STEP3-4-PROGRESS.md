@@ -37,8 +37,20 @@
 - 命令 list_library_skills / distribute_skill_library；設定頁「技能庫」卡片。
 - 註：技能庫 `_skills/` 目前由人工放入原生 SKILL.md；未來可由審核佇列 Skill 項目升級。
 
-### Step 4b — Core 自管 git（待做）
-- Core 管理 vault git：pull、commit（作者 あまぎ）、push；用 utils/proc::command 組 git。
+### Step 4b — Core 自管 git ✅
+- `vault_git`：status_short / pull(--ff-only) / sync(add -A → commit 作者 あまぎ → push)。
+- 命令 vault_git_status / vault_git_pull / vault_git_sync；設定頁 Vault 卡片加 狀態 / Pull / 提交並推送。
+
+---
+
+## 🎉 全部完成
+Step 2 + Step 3(a/b/c) + Step 4(a/b) 皆完成，功能完整可用（adr-002 MVP 終點）。
+Phase 3（lint/consolidate）依 adr-002 延後至內容累積後再開。
+
+### 後續可選增強
+- 技能庫 `_skills/` 的「升級」入口（審核佇列 Skill → 技能庫）。
+- sources/clips 的常駐 file watcher（目前為掃描式）。
+- 啟動時自動 vault git pull（目前為手動按鈕）。
 
 ## 待確認（adr-002）
 - `troubleshooting` 模板欄位最終定版。

@@ -263,6 +263,9 @@ export const api = {
   // ── Vault 知識庫 ──────────────────────────────────
   getVaultConfig: () => invoke<VaultConfig>('get_vault_config'),
   setVaultPath: (path: string) => invoke<VaultSetResult>('set_vault_path', { path }),
+  vaultGitStatus: () => invoke<string>('vault_git_status'),
+  vaultGitPull: () => invoke<string>('vault_git_pull'),
+  vaultGitSync: (message?: string) => invoke<string>('vault_git_sync', { message: message ?? null }),
   initProjectVault: (projectId: string) => invoke<InitResult>('init_project_vault', { projectId }),
 
   // ── 知識匯入（Wiki）──────────────────────────────

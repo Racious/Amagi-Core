@@ -94,9 +94,13 @@
         <button class="btn btn-primary btn-sm" :disabled="vaultBusy" @click="chooseVault">
           {{ vaultBusy ? '套用中…' : '選擇 vault 資料夾並套用' }}
         </button>
+        <button class="btn btn-ghost btn-sm" :disabled="gitBusy || !vaultPath" @click="gitPull">Pull</button>
+        <button class="btn btn-ghost btn-sm" :disabled="gitBusy || !vaultPath" @click="gitSync">提交並推送</button>
+        <button class="btn btn-ghost btn-sm" :disabled="gitBusy || !vaultPath" @click="gitStatus">狀態</button>
       </div>
       <p v-if="vaultMsg" class="text-xs mt-2" style="color: var(--c-accent);">{{ vaultMsg }}</p>
       <p v-if="vaultWarn" class="text-xs mt-2" style="color: var(--c-warn, #b45309);">{{ vaultWarn }}</p>
+      <pre v-if="gitMsg" class="text-xs mt-2 whitespace-pre-wrap text-muted">{{ gitMsg }}</pre>
     </div>
 
     <!-- 技能庫 -->
@@ -191,6 +195,33 @@ async function chooseVault() {
   } finally {
     vaultBusy.value = false
   }
+}
+
+// ── vault git 自管 ────────────────────────────────
+const gitBusy = ref(false)
+const gitMsg = ref('')
+
+async function gitStatus() {
+  gitBusy.value = true
+  try {
+    const s = await api.vaultGitStatus()
+    gitMsg.value = s.trim() ? s : '工作區乾淨，無變更。'
+  } catch (e: any) { gitMsg.value = `失敗：${e?.message ?? e}` }
+  finally { gitBusy.value = false }
+}
+
+async function gitPull() {
+  gitBusy.value = true
+  try { gitMsg.value = await api.vaultGitPull() || '已是最新。' }
+  catch (e: any) { gitMsg.value = `失敗：${e?.message ?? e}` }
+  finally { gitBusy.value = false }
+}
+
+async function gitSync() {
+  gitBusy.value = true
+  try { gitMsg.value = await api.vaultGitSync() }
+  catch (e: any) { gitMsg.value = `失敗：${e?.message ?? e}` }
+  finally { gitBusy.value = false }
 }
 
 // ── 技能庫 ────────────────────────────────────────

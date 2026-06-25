@@ -13,4 +13,5 @@ pub mod vault_manager;
 pub mod wiki_exporter;
 pub mod clip_scanner;
 pub mod skill_library;
+pub mod vault_git;
 pub mod tray;

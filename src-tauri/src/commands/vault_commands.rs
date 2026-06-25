@@ -1,7 +1,7 @@
 use std::path::Path;
 use tauri::State;
 use crate::{AppError, AppState};
-use crate::core::{project_manager, vault_manager::{self, VaultConfig, VaultSetResult}};
+use crate::core::{project_manager, vault_git, vault_manager::{self, VaultConfig, VaultSetResult}};
 use crate::models::project::InitResult;
 
 #[tauri::command]
@@ -30,4 +30,31 @@ pub async fn init_project_vault(
         .vault_path
         .ok_or_else(|| AppError::InvalidPath("尚未設定 vault 路徑，請先到「設定」指定".into()))?;
     project_manager::init_project_vault(&project, Path::new(&vault_root))
+}
+
+fn vault_root(state: &State<'_, AppState>) -> Result<String, AppError> {
+    vault_manager::get_vault_config(&state.data_dir)
+        .vault_path
+        .ok_or_else(|| AppError::InvalidPath("尚未設定 vault 路徑，請先到「設定」指定".into()))
+}
+
+#[tauri::command]
+pub async fn vault_git_status(state: State<'_, AppState>) -> Result<String, AppError> {
+    vault_git::status_short(Path::new(&vault_root(&state)?))
+}
+
+#[tauri::command]
+pub async fn vault_git_pull(state: State<'_, AppState>) -> Result<String, AppError> {
+    vault_git::pull(Path::new(&vault_root(&state)?))
+}
+
+#[tauri::command]
+pub async fn vault_git_sync(
+    message: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<String, AppError> {
+    let msg = message
+        .filter(|m| !m.trim().is_empty())
+        .unwrap_or_else(|| "wiki: Amagi Core 自動同步".to_string());
+    vault_git::sync(Path::new(&vault_root(&state)?), &msg)
 }
