@@ -6,6 +6,38 @@
 
 ---
 
+## 〇、接手指南（換機驗測，先讀這段）
+
+### 1. 同步程式碼與知識庫（兩個 repo）
+```
+# Amagi Core（本檔所在 repo）
+git fetch
+git checkout feat/vault-path-managed-pointer
+git pull
+
+# amagi-vault（知識庫，另一個 repo；路徑見全局 CLAUDE.md 或自己記得的位置）
+cd <amagi-vault 路徑>
+git pull
+```
+
+### 2. 告知該機的 Claude / 天城（把這段貼進對話）
+> 我們在驗測 amagi-vault × Amagi Core 整合的 Step 2~4。
+> 請先讀 `docs/STEP3-4-PROGRESS.md`（進度）與 `docs/STEP3-4-VERIFICATION.md`（理念/變更/驗測），
+> 然後陪我照 T1~T7 逐項驗測，記錄不符需求或有 bug 之處。
+
+### 3. 啟動並驗測
+```
+npm install          # 保險起見（本次未動依賴）
+npm run tauri:dev    # 啟動 app
+```
+接著依下方「三、驗測指南」T1~T7 操作。前置提醒：
+- **T1** 會寫本機全局 `~/.claude/CLAUDE.md`（首次跑前先備份該檔）。
+- **T5** 需先在 vault `sources/clips/` 放幾個 `.md`；**T6** 需先在 vault `_skills/` 放原生 `SKILL.md`。
+- **T7** 會對 vault repo 真實 `commit + push`。
+- 各機路徑不同步：本機 vault 路徑用 app「設定→知識庫(Vault)」設定即可（即 T1）。
+
+---
+
 ## 一、開發理念與架構
 
 ### 核心理念
