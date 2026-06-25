@@ -10,4 +10,5 @@ pub mod agent_exporter;
 pub mod workflow_manager;
 pub mod bridge_engine;
 pub mod vault_manager;
+pub mod wiki_exporter;
 pub mod tray;

@@ -74,9 +74,9 @@ import StatusBadge from '../components/StatusBadge.vue'
 
 const reviewStore = useReviewStore()
 
-const pendingItems = computed(() => reviewStore.items.filter(i => i.status === 'pending'))
-const acceptedItems = computed(() => reviewStore.items.filter(i => i.status === 'accepted'))
-const doneItems = computed(() => reviewStore.items.filter(i => i.status === 'ignored' || i.status === 'synced'))
+const pendingItems = computed(() => reviewStore.items.filter(i => i.status === 'pending' && i.itemType !== 'wiki'))
+const acceptedItems = computed(() => reviewStore.items.filter(i => i.status === 'accepted' && i.itemType !== 'wiki'))
+const doneItems = computed(() => reviewStore.items.filter(i => (i.status === 'ignored' || i.status === 'synced') && i.itemType !== 'wiki'))
 
 async function accept(id: string) {
   await reviewStore.accept([id])

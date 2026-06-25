@@ -7,3 +7,4 @@ pub mod sync_commands;
 pub mod workflow_commands;
 pub mod bridge_commands;
 pub mod vault_commands;
+pub mod wiki_commands;

@@ -34,7 +34,7 @@ export interface LearnResult {
   candidateIds: string[]
 }
 
-export type ReviewItemType = 'memory' | 'skill' | 'blocked'
+export type ReviewItemType = 'memory' | 'skill' | 'blocked' | 'wiki'
 export type RiskLevel = 'low' | 'medium' | 'high'
 export type ReviewStatus = 'pending' | 'accepted' | 'ignored' | 'synced'
 
@@ -184,6 +184,19 @@ export interface VaultSetResult {
   pointerAction: 'appended' | 'replaced'
 }
 
+export interface WikiIngestInput {
+  projectId: string
+  layer: string
+  pageType: string
+  title: string
+  content: string
+}
+
+export interface WikiWriteResult {
+  written: string[]
+  skipped: string[]
+}
+
 export const api = {
   addProject: (path: string) => invoke<ProjectInfo>('add_project', { path }),
   initProject: (projectId: string) => invoke<InitResult>('init_project', { projectId }),
@@ -240,4 +253,8 @@ export const api = {
   getVaultConfig: () => invoke<VaultConfig>('get_vault_config'),
   setVaultPath: (path: string) => invoke<VaultSetResult>('set_vault_path', { path }),
   initProjectVault: (projectId: string) => invoke<InitResult>('init_project_vault', { projectId }),
+
+  // ── 知識匯入（Wiki）──────────────────────────────
+  ingestWikiPage: (input: WikiIngestInput) => invoke<ReviewItem>('ingest_wiki_page', { ...input }),
+  writeWikiPages: (ids: string[]) => invoke<WikiWriteResult>('write_wiki_pages', { ids }),
 }

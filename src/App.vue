@@ -85,6 +85,7 @@ const navGroups = [
     items: [
       { to: '/dashboard', icon: '🏠', label: '總覽', badge: false },
       { to: '/projects', icon: '📁', label: '專案管理', badge: false },
+      { to: '/ingest', icon: '📥', label: '知識匯入', badge: false },
     ],
   },
   {
