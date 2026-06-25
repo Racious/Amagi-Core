@@ -17,6 +17,7 @@ use commands::review_commands::*;
 use commands::sync_commands::*;
 use commands::workflow_commands::*;
 use commands::bridge_commands::*;
+use commands::vault_commands::*;
 
 #[derive(Debug, serde::Serialize, thiserror::Error)]
 #[serde(tag = "kind", content = "message")]
@@ -127,6 +128,9 @@ pub fn run() {
             advance_bridge_run,
             get_bridge_run,
             cancel_bridge_run,
+            set_vault_path,
+            get_vault_config,
+            init_project_vault,
         ])
         .run(tauri::generate_context!())
         .expect("AMAGI Core 啟動失敗");

@@ -8,6 +8,7 @@ export interface ProjectInfo {
   currentBranch: string | null
   initialized: boolean
   pendingReviewCount: number
+  vaultFolder: string | null
 }
 
 export interface InitResult {
@@ -169,6 +170,20 @@ export interface BridgeRun {
   updatedAt: string
 }
 
+// ── Vault 知識庫 相關型別 ──────────────────────────
+export interface VaultConfig {
+  vaultPath: string | null
+  pointerWritten: boolean
+}
+
+export interface VaultSetResult {
+  vaultPath: string
+  looksLikeVault: boolean
+  claudeMdPath: string
+  backupMade: boolean
+  pointerAction: 'appended' | 'replaced'
+}
+
 export const api = {
   addProject: (path: string) => invoke<ProjectInfo>('add_project', { path }),
   initProject: (projectId: string) => invoke<InitResult>('init_project', { projectId }),
@@ -220,4 +235,9 @@ export const api = {
     invoke<BridgeRun | null>('get_bridge_run', { projectId }),
   cancelBridgeRun: (projectId: string) =>
     invoke<void>('cancel_bridge_run', { projectId }),
+
+  // ── Vault 知識庫 ──────────────────────────────────
+  getVaultConfig: () => invoke<VaultConfig>('get_vault_config'),
+  setVaultPath: (path: string) => invoke<VaultSetResult>('set_vault_path', { path }),
+  initProjectVault: (projectId: string) => invoke<InitResult>('init_project_vault', { projectId }),
 }

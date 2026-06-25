@@ -79,6 +79,26 @@
       </div>
     </div>
 
+    <!-- 知識庫（Vault） -->
+    <div class="card p-5 mb-4">
+      <div class="font-semibold text-sm mb-1 text-fg">知識庫（Vault）</div>
+      <p class="text-xs text-muted mb-3">
+        設定本機 vault 資料夾。套用後，AMAGI Core 會在全局 ~/.claude/CLAUDE.md 寫入受管區塊，
+        讓 Claude 對話開始時自動指向本機 vault（僅替換受管區塊，原內容不動，並先備份 .bak）。
+      </p>
+      <div class="text-sm mb-3">
+        <span class="text-muted">目前路徑：</span>
+        <span class="text-fg break-all">{{ vaultPath || '（未設定）' }}</span>
+      </div>
+      <div class="flex items-center gap-3 flex-wrap">
+        <button class="btn btn-primary btn-sm" :disabled="vaultBusy" @click="chooseVault">
+          {{ vaultBusy ? '套用中…' : '選擇 vault 資料夾並套用' }}
+        </button>
+      </div>
+      <p v-if="vaultMsg" class="text-xs mt-2" style="color: var(--c-accent);">{{ vaultMsg }}</p>
+      <p v-if="vaultWarn" class="text-xs mt-2" style="color: var(--c-warn, #b45309);">{{ vaultWarn }}</p>
+    </div>
+
     <!-- 軟體更新 -->
     <div class="card p-5 mb-4">
       <div class="font-semibold text-sm mb-3 text-fg">軟體更新</div>
@@ -113,14 +133,52 @@ import { getVersion } from '@tauri-apps/api/app'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useTheme, THEMES } from '../composables/useTheme'
 import { useUpdater } from '../composables/useUpdater'
+import { open } from '@tauri-apps/plugin-dialog'
+import { api } from '../api/tauriCommands'
 
 const settingsStore = useSettingsStore()
 const { pref, set } = useTheme()
 const { status: updateStatus, newVersion, errorMsg, progress, checkForUpdate, installUpdate } = useUpdater()
 
 const appVersion = ref('—')
+
+// ── Vault 知識庫設定 ──────────────────────────────
+const vaultPath = ref<string | null>(null)
+const vaultBusy = ref(false)
+const vaultMsg = ref('')
+const vaultWarn = ref('')
+
+async function loadVault() {
+  try {
+    const cfg = await api.getVaultConfig()
+    vaultPath.value = cfg.vaultPath
+  } catch { /* 非 Tauri 環境 */ }
+}
+
+async function chooseVault() {
+  vaultMsg.value = ''
+  vaultWarn.value = ''
+  const picked = await open({ directory: true, multiple: false, title: '選擇 vault 資料夾' })
+  if (typeof picked !== 'string') return
+  vaultBusy.value = true
+  try {
+    const r = await api.setVaultPath(picked)
+    vaultPath.value = r.vaultPath
+    const verb = r.pointerAction === 'replaced' ? '更新' : '寫入'
+    vaultMsg.value = `已${verb} ~/.claude/CLAUDE.md 受管區塊${r.backupMade ? '（已備份 .bak）' : ''}`
+    if (!r.looksLikeVault) {
+      vaultWarn.value = '提醒：該資料夾未偵測到 CLAUDE.md / index.md，可能尚未初始化為 vault。'
+    }
+  } catch (e: any) {
+    vaultWarn.value = `設定失敗：${e?.message ?? e}`
+  } finally {
+    vaultBusy.value = false
+  }
+}
+
 onMounted(async () => {
   try { appVersion.value = await getVersion() } catch { /* 非 Tauri 環境 */ }
+  loadVault()
 })
 
 const updateText = computed(() => {
