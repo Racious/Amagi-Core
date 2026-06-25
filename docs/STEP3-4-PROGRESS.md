@@ -32,9 +32,13 @@
 
 ## 待辦（依序）
 
-### Step 4 — 技能庫分發 + Core 自管 git
-- 技能庫單一來源（vault `_skills/`）→ Core 分發原生格式到各 repo 的 .claude/skills、.codex/skills。
-- Core 自管 vault git：啟動 pull、變更 commit、收工 push（用 utils/proc::command 組 git，無現成封裝）。
+### Step 4a — 技能庫分發 ✅
+- `skill_library`：list_library_skills + distribute（vault `_skills/` → 各 repo .claude/skills、.codex/skills，覆寫受管副本）。
+- 命令 list_library_skills / distribute_skill_library；設定頁「技能庫」卡片。
+- 註：技能庫 `_skills/` 目前由人工放入原生 SKILL.md；未來可由審核佇列 Skill 項目升級。
+
+### Step 4b — Core 自管 git（待做）
+- Core 管理 vault git：pull、commit（作者 あまぎ）、push；用 utils/proc::command 組 git。
 
 ## 待確認（adr-002）
 - `troubleshooting` 模板欄位最終定版。

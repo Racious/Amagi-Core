@@ -197,6 +197,17 @@ export interface WikiWriteResult {
   skipped: string[]
 }
 
+export interface LibrarySkill {
+  slug: string
+  name: string
+}
+
+export interface DistributeResult {
+  skillCount: number
+  repoCount: number
+  writtenCount: number
+}
+
 export const api = {
   addProject: (path: string) => invoke<ProjectInfo>('add_project', { path }),
   initProject: (projectId: string) => invoke<InitResult>('init_project', { projectId }),
@@ -260,4 +271,8 @@ export const api = {
     invoke<ReviewItem>('ingest_wiki_from_file', { ...input }),
   scanVaultClips: () => invoke<number>('scan_vault_clips'),
   writeWikiPages: (ids: string[]) => invoke<WikiWriteResult>('write_wiki_pages', { ids }),
+
+  // ── 技能庫 ────────────────────────────────────────
+  listLibrarySkills: () => invoke<LibrarySkill[]>('list_library_skills'),
+  distributeSkillLibrary: () => invoke<DistributeResult>('distribute_skill_library'),
 }

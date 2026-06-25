@@ -8,3 +8,4 @@ pub mod workflow_commands;
 pub mod bridge_commands;
 pub mod vault_commands;
 pub mod wiki_commands;
+pub mod skill_commands;
