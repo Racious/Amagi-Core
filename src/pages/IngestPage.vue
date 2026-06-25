@@ -51,8 +51,13 @@
     </div>
 
     <!-- 待審核 wiki 草稿 -->
-    <div class="mb-3 text-xs font-bold uppercase tracking-wider text-muted">
-      待審核知識草稿（{{ pendingWiki.length }}）
+    <div class="flex items-center justify-between mb-3">
+      <div class="text-xs font-bold uppercase tracking-wider text-muted">
+        待審核知識草稿（{{ pendingWiki.length }}）
+      </div>
+      <button class="btn btn-ghost btn-sm" :disabled="busy" @click="scanClips">
+        掃描 sources/clips
+      </button>
     </div>
     <div v-if="pendingWiki.length === 0" class="card card-dashed p-6 text-center text-sm text-muted mb-6">
       尚無待審核的知識草稿。
@@ -179,6 +184,17 @@ async function importFromFile() {
       filePath: picked,
     })
     successMsg.value = `已從檔案建立草稿「${item.title}」，原始來源已存入 sources/。`
+    await refresh()
+  } catch (e: any) { error.value = e?.message ?? String(e) }
+  finally { busy.value = false }
+}
+
+async function scanClips() {
+  clearMsg()
+  busy.value = true
+  try {
+    const n = await api.scanVaultClips()
+    successMsg.value = n > 0 ? `從 sources/clips 產生 ${n} 筆新候選。` : '沒有新的剪藏可匯入。'
     await refresh()
   } catch (e: any) { error.value = e?.message ?? String(e) }
   finally { busy.value = false }

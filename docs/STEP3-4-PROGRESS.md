@@ -24,11 +24,13 @@
 - `build_wiki_md` 依 `source_pending_file` 輸出 `source:` frontmatter。
 - 前端：IngestPage「從檔案匯入…」按鈕（檔案選擇器）。
 
-## 待辦（依序）
+### Step 3c — sources/clips 掃描 + 分類器 ✅
+- `clip_scanner::scan_clips`：掃 vault `sources/clips/*.md` → 去重 → 產 wiki 候選；含 frontmatter 解析。
+- 規則式 `classify`：troubleshooting / adr / spec / concept。
+- 命令 `scan_vault_clips`、IngestPage「掃描 sources/clips」按鈕。
+- 註：採掃描式（非常駐監看）；live file watcher 留作後續增強。
 
-### Step 3c — sources/clips 自動監看 + 分類器
-- 掃 vault `sources/clips/*.md`（Web Clipper 落點）→ 自動產 wiki 候選進佇列。
-- 規則式分類器：判定型別（adr/spec/troubleshooting/concept…）與歸層。
+## 待辦（依序）
 
 ### Step 4 — 技能庫分發 + Core 自管 git
 - 技能庫單一來源（vault `_skills/`）→ Core 分發原生格式到各 repo 的 .claude/skills、.codex/skills。

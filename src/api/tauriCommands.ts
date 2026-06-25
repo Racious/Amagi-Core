@@ -258,5 +258,6 @@ export const api = {
   ingestWikiPage: (input: WikiIngestInput) => invoke<ReviewItem>('ingest_wiki_page', { ...input }),
   ingestWikiFromFile: (input: { projectId: string; layer: string; pageType: string; filePath: string }) =>
     invoke<ReviewItem>('ingest_wiki_from_file', { ...input }),
+  scanVaultClips: () => invoke<number>('scan_vault_clips'),
   writeWikiPages: (ids: string[]) => invoke<WikiWriteResult>('write_wiki_pages', { ids }),
 }

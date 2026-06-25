@@ -5,7 +5,7 @@ use serde::Serialize;
 use tauri::State;
 use crate::{AppError, AppState};
 use crate::models::review::{ReviewItem, ReviewItemType, ReviewStatus, RiskLevel, SyncScope};
-use crate::core::{review_queue, vault_manager, wiki_exporter, safety_filter};
+use crate::core::{review_queue, vault_manager, wiki_exporter, clip_scanner, safety_filter};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -118,6 +118,29 @@ pub async fn ingest_wiki_from_file(
     };
     review_queue::add_items(&state.data_dir, vec![item.clone()])?;
     Ok(item)
+}
+
+/// 掃描 vault sources/clips/，為新剪藏產生 wiki 候選進佇列；回傳新增筆數。
+#[tauri::command]
+pub async fn scan_vault_clips(state: State<'_, AppState>) -> Result<usize, AppError> {
+    let data_dir = state.data_dir.clone();
+    let cfg = vault_manager::get_vault_config(&data_dir);
+    let vault_root = cfg
+        .vault_path
+        .ok_or_else(|| AppError::InvalidPath("尚未設定 vault 路徑，請先到「設定」指定".into()))?;
+
+    let existing: Vec<String> = review_queue::list_items(&data_dir, None)
+        .into_iter()
+        .filter(|i| i.item_type == ReviewItemType::Wiki)
+        .filter_map(|i| i.source_pending_file)
+        .collect();
+
+    let candidates = clip_scanner::scan_clips(Path::new(&vault_root), &existing)?;
+    let n = candidates.len();
+    if n > 0 {
+        review_queue::add_items(&data_dir, candidates)?;
+    }
+    Ok(n)
 }
 
 /// 接受指定的 wiki 候選並寫入 vault；成功者標記為 Synced。
