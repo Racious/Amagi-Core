@@ -62,6 +62,19 @@ pub fn mark_synced(data_dir: &Path, ids: &[String]) -> Result<(), AppError> {
     json_store::write_json(&path, &data)
 }
 
+/// 把指定項目退回 Pending（例如寫入時因目標已存在而略過，須留在待審核供老爺改標題重試）。
+pub fn mark_pending(data_dir: &Path, ids: &[String]) -> Result<(), AppError> {
+    let path = queue_path(data_dir);
+    let mut data: ReviewQueueData = json_store::read_json_or_default(&path);
+    for item in &mut data.items {
+        if ids.contains(&item.id) {
+            item.status = ReviewStatus::Pending;
+            item.reviewed_at = None;
+        }
+    }
+    json_store::write_json(&path, &data)
+}
+
 pub fn update_item(data_dir: &Path, updated: ReviewItem) -> Result<ReviewItem, AppError> {
     let path = queue_path(data_dir);
     let mut data: ReviewQueueData = json_store::read_json_or_default(&path);

@@ -76,14 +76,26 @@ pub fn build_wiki_md(item: &ReviewItem, category: &str) -> String {
         Some(s) if !s.is_empty() => format!("source: {s}\n"),
         _ => String::new(),
     };
+    // 若內容首個非空行已是 H1（常見於檔案匯入的原文），不再前置 title 標題，避免重複 H1。
+    let has_own_h1 = item
+        .content
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .map(|l| l.trim_start().starts_with("# "))
+        .unwrap_or(false);
+    let body = if has_own_h1 {
+        item.content.clone()
+    } else {
+        format!("# {}\n\n{}", item.title, item.content)
+    };
     format!(
-        "---\nid: {id}\ntitle: {title}\ntype: {ty}\nstatus: active\nconfidence: medium\nsalience: 5\ntags: []\nlast_updated: {date}\n{source}protected: false\n---\n\n# {title}\n\n{content}\n",
+        "---\nid: {id}\ntitle: {title}\ntype: {ty}\nstatus: active\nconfidence: medium\nsalience: 5\ntags: []\nlast_updated: {date}\n{source}protected: false\n---\n\n{body}\n",
         id = id,
         title = item.title,
         ty = category,
         date = date,
         source = source_line,
-        content = item.content
+        body = body
     )
 }
 
@@ -120,6 +132,17 @@ mod tests {
         assert!(md.contains("title: Bridge 設計"));
         assert!(md.contains("# Bridge 設計"));
         assert!(md.contains("決策內容"));
+    }
+
+    #[test]
+    fn test_build_wiki_md_no_duplicate_h1_when_content_has_h1() {
+        let it = wiki_item("檔名標題", "adr", "general", "# 原文標題\n\n內文");
+        let md = build_wiki_md(&it, "adr");
+        // 內容自帶 H1 → 不再前置 # title
+        assert!(md.contains("# 原文標題"));
+        assert!(!md.contains("# 檔名標題"));
+        // 仍只有一個 H1
+        assert_eq!(md.matches("\n# ").count(), 1);
     }
 
     #[test]

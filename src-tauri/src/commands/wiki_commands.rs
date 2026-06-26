@@ -163,7 +163,8 @@ pub async fn write_wiki_pages(
 
     let res = wiki_exporter::write_wiki_pages(Path::new(&vault_root), &wiki_items)?;
 
-    // 只把「真的寫進去」的標記為 Synced；被略過（已存在）的維持 Accepted 供老爺處理
+    // 只把「真的寫進去」的標記為 Synced；被略過（目標已存在）的退回 Pending，
+    // 留在待審核區供老爺改標題重試，避免落入 accepted 的 UI 死角。
     if !res.written.is_empty() {
         let written_ids: Vec<String> = wiki_items
             .iter()
@@ -174,6 +175,17 @@ pub async fn write_wiki_pages(
             .map(|i| i.id.clone())
             .collect();
         review_queue::mark_synced(&data_dir, &written_ids)?;
+    }
+    if !res.skipped.is_empty() {
+        let skipped_ids: Vec<String> = wiki_items
+            .iter()
+            .filter(|i| {
+                let slug = crate::utils::fs_utils::slugify(&i.title);
+                res.skipped.iter().any(|s| s.contains(&slug))
+            })
+            .map(|i| i.id.clone())
+            .collect();
+        review_queue::mark_pending(&data_dir, &skipped_ids)?;
     }
 
     Ok(WikiWriteResultDto {
