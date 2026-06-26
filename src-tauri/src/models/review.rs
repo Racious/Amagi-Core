@@ -21,6 +21,8 @@ pub enum ReviewItemType {
     Memory,
     Skill,
     Blocked,
+    /// vault 知識頁候選（adr-002 D8）：接受後由 wiki_exporter 寫入 vault。
+    Wiki,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

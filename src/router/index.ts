@@ -6,6 +6,7 @@ const router = createRouter({
     { path: '/', redirect: '/dashboard' },
     { path: '/dashboard', name: 'dashboard', component: () => import('../pages/DashboardPage.vue') },
     { path: '/projects', name: 'projects', component: () => import('../pages/ProjectsPage.vue') },
+    { path: '/ingest', name: 'ingest', component: () => import('../pages/IngestPage.vue') },
     { path: '/learn', name: 'learn', component: () => import('../pages/LearnPage.vue') },
     { path: '/review', name: 'review', component: () => import('../pages/ReviewQueuePage.vue') },
     { path: '/skills', name: 'skills', component: () => import('../pages/SkillsPage.vue') },

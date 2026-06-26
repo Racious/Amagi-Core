@@ -10,6 +10,9 @@ pub struct Project {
     pub created_at: DateTime<Utc>,
     pub last_scanned_at: Option<DateTime<Utc>>,
     pub initialized: bool,
+    /// 對應的 vault 知識資料夾（相對 vault root，如 "projects/amagi-core"）。
+    #[serde(default)]
+    pub vault_folder: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -22,6 +25,7 @@ pub struct ProjectInfo {
     pub current_branch: Option<String>,
     pub initialized: bool,
     pub pending_review_count: usize,
+    pub vault_folder: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

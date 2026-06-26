@@ -35,6 +35,9 @@
         <div class="flex-1 min-w-0">
           <div class="font-bold truncate text-fg">{{ project.name }}</div>
           <div class="text-xs truncate mt-0.5 text-muted">{{ project.path }}</div>
+          <div class="text-xs truncate mt-0.5 text-muted">
+            Vault：<span class="text-fg">{{ project.vaultFolder || '—' }}</span>
+          </div>
           <div class="flex items-center gap-2 mt-1.5">
             <span v-if="project.currentBranch" class="pill tone-accent">
               {{ project.currentBranch }}
@@ -55,6 +58,11 @@
             class="btn btn-primary btn-sm"
           >初始化</button>
           <button
+            @click="initVault(project.id)"
+            :disabled="vaultBusy"
+            class="btn btn-ghost btn-sm"
+          >vault 資料夾</button>
+          <button
             @click="removeProject(project.id)"
             class="btn btn-danger btn-sm"
           >移除</button>
@@ -68,10 +76,12 @@
 import { ref } from 'vue'
 import { open } from '@tauri-apps/plugin-dialog'
 import { useProjectStore } from '../stores/projectStore'
+import { api } from '../api/tauriCommands'
 
 const projectStore = useProjectStore()
 const error = ref<string | null>(null)
 const successMsg = ref<string | null>(null)
+const vaultBusy = ref(false)
 
 function clearMessages() {
   error.value = null
@@ -99,6 +109,20 @@ async function initProject(projectId: string) {
     setTimeout(() => { successMsg.value = null }, 4000)
   } catch (e: any) {
     error.value = e?.message ?? String(e)
+  }
+}
+
+async function initVault(projectId: string) {
+  clearMessages()
+  vaultBusy.value = true
+  try {
+    const r = await api.initProjectVault(projectId)
+    successMsg.value = `已在 vault 建立知識資料夾（新增 ${r.createdDirs.length} 目錄、${r.createdFiles.length} 檔）。`
+    setTimeout(() => { successMsg.value = null }, 4000)
+  } catch (e: any) {
+    error.value = e?.message ?? String(e)
+  } finally {
+    vaultBusy.value = false
   }
 }
 

@@ -7,7 +7,7 @@ export const useReviewStore = defineStore('review', () => {
   const loading = ref(false)
   const error = ref<string | null>(null)
 
-  const pendingItems = computed(() => items.value.filter(i => i.status === 'pending'))
+  const pendingItems = computed(() => items.value.filter(i => i.status === 'pending' && i.itemType !== 'wiki'))
   const acceptedItems = computed(() => items.value.filter(i => i.status === 'accepted'))
   const pendingCount = computed(() => pendingItems.value.length)
 

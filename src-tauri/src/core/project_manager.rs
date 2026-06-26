@@ -21,6 +21,8 @@ pub fn add_project(path: &str, data_dir: &Path) -> Result<Project, AppError> {
         .unwrap_or("unknown")
         .to_string();
 
+    let vault_folder = Some(format!("projects/{}", fs_utils::slugify(&name)));
+
     let project = Project {
         id: Uuid::new_v4().to_string(),
         name,
@@ -28,6 +30,7 @@ pub fn add_project(path: &str, data_dir: &Path) -> Result<Project, AppError> {
         created_at: Utc::now(),
         last_scanned_at: None,
         initialized: false,
+        vault_folder,
     };
 
     let store_path = data_dir.join("projects.json");
@@ -139,6 +142,81 @@ pub fn init_project(project: &Project) -> Result<InitResult, AppError> {
         created_dirs,
         created_files,
     })
+}
+
+/// 在 vault 內為專案建立知識資料夾骨架（adr-002 D5）。
+/// 非破壞：所有目錄與檔案僅在不存在時建立，不覆寫既有手做內容（D7）。
+pub fn init_project_vault(project: &Project, vault_root: &Path) -> Result<InitResult, AppError> {
+    if !vault_root.is_dir() {
+        return Err(AppError::InvalidPath(format!(
+            "vault 路徑不存在：{}",
+            vault_root.display()
+        )));
+    }
+
+    let folder = project
+        .vault_folder
+        .clone()
+        .unwrap_or_else(|| format!("projects/{}", fs_utils::slugify(&project.name)));
+    let base = vault_root.join(&folder);
+
+    let mut created_dirs = Vec::new();
+    let mut created_files = Vec::new();
+
+    for sub in ["pages/adr", "pages/specs", "pages/business"] {
+        let d = base.join(sub);
+        if !d.exists() {
+            std::fs::create_dir_all(&d).map_err(|e| AppError::Io(e.to_string()))?;
+            created_dirs.push(d.to_string_lossy().to_string());
+        }
+        let keep = d.join(".gitkeep");
+        if !keep.exists() {
+            std::fs::write(&keep, "").map_err(|e| AppError::Io(e.to_string()))?;
+        }
+    }
+
+    let index_md = base.join("index.md");
+    if !index_md.exists() {
+        std::fs::write(&index_md, build_project_index_md(&project.name))
+            .map_err(|e| AppError::Io(e.to_string()))?;
+        created_files.push(index_md.to_string_lossy().to_string());
+    }
+
+    Ok(InitResult {
+        project_id: project.id.clone(),
+        created_dirs,
+        created_files,
+    })
+}
+
+fn build_project_index_md(name: &str) -> String {
+    format!(
+        r#"# {name} — 專案知識目錄
+
+> 由 Amagi Core 建立。對話開始時，天城先閱讀本檔了解專案背景。
+
+---
+
+## 知識頁面
+
+| 分類 | 目錄 | 內容 |
+|------|------|------|
+| 架構決策 | pages/adr | 技術選型、設計決策紀錄 |
+| 介面規格 | pages/specs | command 與 API 規格 |
+| 商業邏輯 | pages/business | 功能流程說明 |
+
+### 頁面清單
+
+| 頁面 | 型別 | 重要性 | 更新日 |
+|------|------|--------|--------|
+| （尚無頁面） | | | |
+
+---
+
+*新增頁面時請更新本清單。*
+"#,
+        name = name
+    )
 }
 
 // ── Agent 技能記錄格式說明（寫入 .amagi/pending/AGENT_INSTRUCTIONS.md）──
@@ -392,5 +470,7 @@ pub fn get_project_info(project: &Project) -> ProjectInfo {
         current_branch: branch,
         initialized: Path::new(&project.path).join(".amagi").exists(),
         pending_review_count: 0,
+        vault_folder: project.vault_folder.clone()
+            .or_else(|| Some(format!("projects/{}", fs_utils::slugify(&project.name)))),
     }
 }

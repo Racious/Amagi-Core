@@ -79,6 +79,47 @@
       </div>
     </div>
 
+    <!-- 知識庫（Vault） -->
+    <div class="card p-5 mb-4">
+      <div class="font-semibold text-sm mb-1 text-fg">知識庫（Vault）</div>
+      <p class="text-xs text-muted mb-3">
+        設定本機 vault 資料夾。套用後，AMAGI Core 會在全局 ~/.claude/CLAUDE.md 寫入受管區塊，
+        讓 Claude 對話開始時自動指向本機 vault（僅替換受管區塊，原內容不動，並先備份 .bak）。
+      </p>
+      <div class="text-sm mb-3">
+        <span class="text-muted">目前路徑：</span>
+        <span class="text-fg break-all">{{ vaultPath || '（未設定）' }}</span>
+      </div>
+      <div class="flex items-center gap-3 flex-wrap">
+        <button class="btn btn-primary btn-sm" :disabled="vaultBusy" @click="chooseVault">
+          {{ vaultBusy ? '套用中…' : '選擇 vault 資料夾並套用' }}
+        </button>
+        <button class="btn btn-ghost btn-sm" :disabled="gitBusy || !vaultPath" @click="gitPull">Pull</button>
+        <button class="btn btn-ghost btn-sm" :disabled="gitBusy || !vaultPath" @click="gitSync">提交並推送</button>
+        <button class="btn btn-ghost btn-sm" :disabled="gitBusy || !vaultPath" @click="gitStatus">狀態</button>
+      </div>
+      <p v-if="vaultMsg" class="text-xs mt-2" style="color: var(--c-accent);">{{ vaultMsg }}</p>
+      <p v-if="vaultWarn" class="text-xs mt-2" style="color: var(--c-warn, #b45309);">{{ vaultWarn }}</p>
+      <pre v-if="gitMsg" class="text-xs mt-2 whitespace-pre-wrap text-muted">{{ gitMsg }}</pre>
+    </div>
+
+    <!-- 技能庫 -->
+    <div class="card p-5 mb-4">
+      <div class="font-semibold text-sm mb-1 text-fg">技能庫</div>
+      <p class="text-xs text-muted mb-3">
+        vault <code>_skills/</code> 為跨專案技能的單一來源。分發會把技能以原生格式
+        同步到所有已加入專案的 .claude/skills 與 .codex/skills（覆寫受管副本）。
+      </p>
+      <div class="text-sm mb-3">
+        <span class="text-muted">技能庫數量：</span>
+        <span class="text-fg">{{ librarySkills.length }}</span>
+      </div>
+      <button class="btn btn-primary btn-sm" :disabled="skillBusy" @click="distributeSkills">
+        {{ skillBusy ? '分發中…' : '分發到所有專案' }}
+      </button>
+      <p v-if="skillMsg" class="text-xs mt-2" style="color: var(--c-accent);">{{ skillMsg }}</p>
+    </div>
+
     <!-- 軟體更新 -->
     <div class="card p-5 mb-4">
       <div class="font-semibold text-sm mb-3 text-fg">軟體更新</div>
@@ -113,14 +154,102 @@ import { getVersion } from '@tauri-apps/api/app'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useTheme, THEMES } from '../composables/useTheme'
 import { useUpdater } from '../composables/useUpdater'
+import { open } from '@tauri-apps/plugin-dialog'
+import { api } from '../api/tauriCommands'
 
 const settingsStore = useSettingsStore()
 const { pref, set } = useTheme()
 const { status: updateStatus, newVersion, errorMsg, progress, checkForUpdate, installUpdate } = useUpdater()
 
 const appVersion = ref('—')
+
+// ── Vault 知識庫設定 ──────────────────────────────
+const vaultPath = ref<string | null>(null)
+const vaultBusy = ref(false)
+const vaultMsg = ref('')
+const vaultWarn = ref('')
+
+async function loadVault() {
+  try {
+    const cfg = await api.getVaultConfig()
+    vaultPath.value = cfg.vaultPath
+  } catch { /* 非 Tauri 環境 */ }
+}
+
+async function chooseVault() {
+  vaultMsg.value = ''
+  vaultWarn.value = ''
+  const picked = await open({ directory: true, multiple: false, title: '選擇 vault 資料夾' })
+  if (typeof picked !== 'string') return
+  vaultBusy.value = true
+  try {
+    const r = await api.setVaultPath(picked)
+    vaultPath.value = r.vaultPath
+    const verb = r.pointerAction === 'replaced' ? '更新' : '寫入'
+    vaultMsg.value = `已${verb} ~/.claude/CLAUDE.md 受管區塊${r.backupMade ? '（已備份 .bak）' : ''}`
+    if (!r.looksLikeVault) {
+      vaultWarn.value = '提醒：該資料夾未偵測到 CLAUDE.md / index.md，可能尚未初始化為 vault。'
+    }
+  } catch (e: any) {
+    vaultWarn.value = `設定失敗：${e?.message ?? e}`
+  } finally {
+    vaultBusy.value = false
+  }
+}
+
+// ── vault git 自管 ────────────────────────────────
+const gitBusy = ref(false)
+const gitMsg = ref('')
+
+async function gitStatus() {
+  gitBusy.value = true
+  try {
+    const s = await api.vaultGitStatus()
+    gitMsg.value = s.trim() ? s : '工作區乾淨，無變更。'
+  } catch (e: any) { gitMsg.value = `失敗：${e?.message ?? e}` }
+  finally { gitBusy.value = false }
+}
+
+async function gitPull() {
+  gitBusy.value = true
+  try { gitMsg.value = await api.vaultGitPull() || '已是最新。' }
+  catch (e: any) { gitMsg.value = `失敗：${e?.message ?? e}` }
+  finally { gitBusy.value = false }
+}
+
+async function gitSync() {
+  gitBusy.value = true
+  try { gitMsg.value = await api.vaultGitSync() }
+  catch (e: any) { gitMsg.value = `失敗：${e?.message ?? e}` }
+  finally { gitBusy.value = false }
+}
+
+// ── 技能庫 ────────────────────────────────────────
+const librarySkills = ref<{ slug: string; name: string }[]>([])
+const skillBusy = ref(false)
+const skillMsg = ref('')
+
+async function loadSkills() {
+  try { librarySkills.value = await api.listLibrarySkills() } catch { /* 非 Tauri 環境 */ }
+}
+
+async function distributeSkills() {
+  skillBusy.value = true
+  skillMsg.value = ''
+  try {
+    const r = await api.distributeSkillLibrary()
+    skillMsg.value = `已分發 ${r.skillCount} 個技能到 ${r.repoCount} 個專案（寫入 ${r.writtenCount} 檔）。`
+  } catch (e: any) {
+    skillMsg.value = `分發失敗：${e?.message ?? e}`
+  } finally {
+    skillBusy.value = false
+  }
+}
+
 onMounted(async () => {
   try { appVersion.value = await getVersion() } catch { /* 非 Tauri 環境 */ }
+  loadVault()
+  loadSkills()
 })
 
 const updateText = computed(() => {
