@@ -103,27 +103,12 @@
       <pre v-if="gitMsg" class="text-xs mt-2 whitespace-pre-wrap text-muted">{{ gitMsg }}</pre>
     </div>
 
-    <!-- 技能庫 -->
+    <!-- 技能分發（已移至「技能管理」頁）-->
     <div class="card p-5 mb-4">
-      <div class="font-semibold text-sm mb-1 text-fg">技能庫</div>
-      <p class="text-xs text-muted mb-3">
-        vault <code>_skills/</code> 為跨專案技能的單一來源。「分發到所有專案」把技能以原生格式
-        同步到各專案的 .claude/skills 與 .codex/skills；「分發到全域」則寫入本機
-        ~/.codex/skills 與 ~/.claude/skills，該機所有專案共用（皆覆寫受管副本）。
+      <div class="font-semibold text-sm mb-1 text-fg">技能分發</div>
+      <p class="text-xs text-muted">
+        技能分發已移至「技能管理」頁，改用<b>選擇性分發矩陣</b>（勾選技能 × 目標），避免一鍵誤分發。
       </p>
-      <div class="text-sm mb-3">
-        <span class="text-muted">技能庫數量：</span>
-        <span class="text-fg">{{ librarySkills.length }}</span>
-      </div>
-      <div class="flex gap-2">
-        <button class="btn btn-primary btn-sm" :disabled="skillBusy" @click="distributeSkills">
-          {{ skillBusy ? '分發中…' : '分發到所有專案' }}
-        </button>
-        <button class="btn btn-sm" :disabled="skillBusy" @click="distributeSkillsGlobal">
-          {{ skillBusy ? '分發中…' : '分發到全域（本機共用）' }}
-        </button>
-      </div>
-      <p v-if="skillMsg" class="text-xs mt-2" style="color: var(--c-accent);">{{ skillMsg }}</p>
     </div>
 
     <!-- 軟體更新 -->
@@ -230,45 +215,9 @@ async function gitSync() {
   finally { gitBusy.value = false }
 }
 
-// ── 技能庫 ────────────────────────────────────────
-const librarySkills = ref<{ slug: string; name: string }[]>([])
-const skillBusy = ref(false)
-const skillMsg = ref('')
-
-async function loadSkills() {
-  try { librarySkills.value = await api.listLibrarySkills() } catch { /* 非 Tauri 環境 */ }
-}
-
-async function distributeSkills() {
-  skillBusy.value = true
-  skillMsg.value = ''
-  try {
-    const r = await api.distributeSkillLibrary()
-    skillMsg.value = `已分發 ${r.skillCount} 個技能到 ${r.repoCount} 個專案（寫入 ${r.writtenCount} 檔）。`
-  } catch (e: any) {
-    skillMsg.value = `分發失敗：${e?.message ?? e}`
-  } finally {
-    skillBusy.value = false
-  }
-}
-
-async function distributeSkillsGlobal() {
-  skillBusy.value = true
-  skillMsg.value = ''
-  try {
-    const r = await api.distributeSkillsGlobal()
-    skillMsg.value = `已分發 ${r.skillCount} 個技能到全域 ~/.codex/skills、~/.claude/skills（寫入 ${r.writtenCount} 檔）。`
-  } catch (e: any) {
-    skillMsg.value = `全域分發失敗：${e?.message ?? e}`
-  } finally {
-    skillBusy.value = false
-  }
-}
-
 onMounted(async () => {
   try { appVersion.value = await getVersion() } catch { /* 非 Tauri 環境 */ }
   loadVault()
-  loadSkills()
 })
 
 const updateText = computed(() => {
