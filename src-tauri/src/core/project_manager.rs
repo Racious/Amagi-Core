@@ -140,11 +140,54 @@ pub fn init_project(project: &Project) -> Result<InitResult, AppError> {
         created_files.push(claude_md.to_string_lossy().to_string());
     }
 
+    // ── 補 .gitignore 派生物規則（冪等、非破壞，Phase 1b）──────
+    if ensure_gitignore_rules(&project.path).map_err(|e| AppError::Io(e.to_string()))? {
+        created_files.push(
+            Path::new(&project.path).join(".gitignore").to_string_lossy().to_string(),
+        );
+    }
+
     Ok(InitResult {
         project_id: project.id.clone(),
         created_dirs,
         created_files,
     })
+}
+
+/// AMAGI Core 派生物的 gitignore 規則（受管副本/工作區，不進版控；根 AGENTS.md/CLAUDE.md 不在內，須保留版控）。
+const MANAGED_GITIGNORE: &[&str] = &[".amagi/", ".codex/skills/", ".claude/skills/"];
+
+/// 冪等、非破壞地把派生物規則補進專案 `.gitignore`：只追加「缺少」的規則行、
+/// 保留既有內容；無檔則建立。回傳是否實際寫入。
+pub(crate) fn ensure_gitignore_rules(project_path: &str) -> std::io::Result<bool> {
+    let path = Path::new(project_path).join(".gitignore");
+    // 非破壞：僅「檔案不存在」視為空檔；其他讀取錯誤回傳 Err，絕不覆寫未知內容。
+    let existing = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e),
+    };
+    let have: std::collections::HashSet<String> =
+        existing.lines().map(|l| l.trim().to_string()).collect();
+    let missing: Vec<&str> = MANAGED_GITIGNORE
+        .iter()
+        .copied()
+        .filter(|r| !have.contains(*r))
+        .collect();
+    if missing.is_empty() {
+        return Ok(false);
+    }
+    let mut content = existing;
+    if !content.is_empty() && !content.ends_with('\n') {
+        content.push('\n');
+    }
+    content.push_str("\n# AMAGI Core 派生物（受管副本/工作區，不進版控）\n");
+    for r in &missing {
+        content.push_str(r);
+        content.push('\n');
+    }
+    std::fs::write(&path, content)?;
+    Ok(true)
 }
 
 /// 在 vault 內為專案建立知識資料夾骨架（adr-002 D5）。

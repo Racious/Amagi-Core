@@ -159,6 +159,11 @@ fn e2e_add_and_init_project() {
     let claude_init = sb.read("CLAUDE.md");
     assert!(claude_init.contains("AMAGI-VAULT-PROJECT:BEGIN"), "CLAUDE.md 缺 vault 指針");
     assert!(claude_init.contains("~/.claude/CLAUDE.md"), "CLAUDE.md 應引用 Claude 全局錨點");
+
+    // Phase 1b：init 應補派生物 gitignore 規則
+    let gi = sb.read(".gitignore");
+    assert!(gi.contains(".amagi/") && gi.contains(".codex/skills/") && gi.contains(".claude/skills/"),
+        "init 應補 .gitignore 派生物規則");
     assert!(sb.read("CLAUDE.md").contains("不可跳步"));
 
     // 冪等：再 init 一次不該爆，且不重複建立既有檔
@@ -270,6 +275,45 @@ fn e2e_custom_vault_folder_in_sync() {
     let previews = agent_exporter::preview_sync_diff(&sb.repo_str(), vf, &[mem, rule]);
     assert!(previews.iter().any(|p| p.new_content.contains("projects/custom-mapping/")),
         "preview new_content 應指向自訂 vault_folder");
+}
+
+#[test]
+fn e2e_gitignore_idempotent_and_preserves() {
+    let sb = Sandbox::new("gi");
+    let repo = sb.repo_str();
+    // 預置既有 .gitignore（自訂規則）
+    std::fs::write(format!("{}/.gitignore", repo), "node_modules\ndist\n").unwrap();
+
+    // 第一次：補派生物規則
+    assert!(project_manager::ensure_gitignore_rules(&repo).unwrap(), "首次應寫入");
+    let gi = std::fs::read_to_string(format!("{}/.gitignore", repo)).unwrap();
+    assert!(gi.contains("node_modules") && gi.contains("dist"), "既有規則應保留");
+    assert!(gi.contains(".amagi/") && gi.contains(".codex/skills/") && gi.contains(".claude/skills/"),
+        "派生物規則應補上");
+
+    // 第二次：冪等，不再變更
+    assert!(!project_manager::ensure_gitignore_rules(&repo).unwrap(), "二次不該再寫");
+    let gi2 = std::fs::read_to_string(format!("{}/.gitignore", repo)).unwrap();
+    assert_eq!(gi, gi2, "二次呼叫內容不變");
+}
+
+#[test]
+fn e2e_gitignore_partial_and_no_false_ignores() {
+    let sb = Sandbox::new("gi2");
+    let repo = sb.repo_str();
+    // 既有已含一條規則、且「無結尾換行」
+    std::fs::write(format!("{}/.gitignore", repo), "target\n.amagi/").unwrap();
+
+    assert!(project_manager::ensure_gitignore_rules(&repo).unwrap(), "應補缺少的兩條");
+    let gi = std::fs::read_to_string(format!("{}/.gitignore", repo)).unwrap();
+
+    assert!(gi.contains("target"), "既有規則保留");
+    assert_eq!(gi.matches(".amagi/").count(), 1, ".amagi/ 不該重複");
+    assert!(gi.contains(".codex/skills/") && gi.contains(".claude/skills/"), "補上另外兩條");
+    // 不誤 ignore 根檔或整個目錄
+    assert!(!gi.contains("AGENTS.md") && !gi.contains("CLAUDE.md"), "不該 ignore 根 agent 檔");
+    assert!(!gi.lines().any(|l| matches!(l.trim(), ".claude/" | ".codex/")),
+        "不該 ignore 整個 .claude/ 或 .codex/");
 }
 
 // ───────────────────────────────────────────────────────────
