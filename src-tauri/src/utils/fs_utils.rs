@@ -16,6 +16,11 @@ pub fn global_codex_skills_dir() -> Option<std::path::PathBuf> {
     dirs::home_dir().map(|h| h.join(".codex").join("skills"))
 }
 
+/// ~/.claude/skills/
+pub fn global_claude_skills_dir() -> Option<std::path::PathBuf> {
+    dirs::home_dir().map(|h| h.join(".claude").join("skills"))
+}
+
 /// ~/.claude/commands/
 pub fn global_claude_commands_dir() -> Option<std::path::PathBuf> {
     dirs::home_dir().map(|h| h.join(".claude").join("commands"))

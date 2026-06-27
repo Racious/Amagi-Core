@@ -121,10 +121,13 @@ pub fn init_project(project: &Project) -> Result<InitResult, AppError> {
         created_files.push(review_path.to_string_lossy().to_string());
     }
 
-    // ── 寫入 AGENTS.md（含技能記錄規範）──────────────
+    // ── 寫入 AGENTS.md / CLAUDE.md（含技能記錄規範 + vault 指針）──────
+    // 權威來源：Project.vault_folder；缺時才退回 slug(name)。
+    let vault_folder = project.vault_folder.clone()
+        .unwrap_or_else(|| crate::core::agent_exporter::project_vault_folder(&project.path));
     let agents_md = Path::new(&project.path).join("AGENTS.md");
     if !agents_md.exists() {
-        std::fs::write(&agents_md, build_initial_agents_md(&project.name))
+        std::fs::write(&agents_md, build_initial_agents_md(&project.name, &vault_folder))
             .map_err(|e| AppError::Io(e.to_string()))?;
         created_files.push(agents_md.to_string_lossy().to_string());
     }
@@ -132,7 +135,7 @@ pub fn init_project(project: &Project) -> Result<InitResult, AppError> {
     // ── 寫入 CLAUDE.md（含技能記錄規範）─────────────
     let claude_md = Path::new(&project.path).join("CLAUDE.md");
     if !claude_md.exists() {
-        std::fs::write(&claude_md, build_initial_claude_md(&project.name))
+        std::fs::write(&claude_md, build_initial_claude_md(&project.name, &vault_folder))
             .map_err(|e| AppError::Io(e.to_string()))?;
         created_files.push(claude_md.to_string_lossy().to_string());
     }
@@ -157,7 +160,7 @@ pub fn init_project_vault(project: &Project, vault_root: &Path) -> Result<InitRe
     let folder = project
         .vault_folder
         .clone()
-        .unwrap_or_else(|| format!("projects/{}", fs_utils::slugify(&project.name)));
+        .unwrap_or_else(|| crate::core::agent_exporter::project_vault_folder(&project.path));
     let base = vault_root.join(&folder);
 
     let mut created_dirs = Vec::new();
@@ -332,9 +335,8 @@ const AFTER_TASK_REVIEW_TEMPLATE: &str = r#"# After Task Review（任務完成�
 - **詢問老爺是否 commit（確認前不得自行 commit）**
 "#;
 
-fn build_initial_agents_md(project_name: &str) -> String {
-    let vf = format!("projects/{}", fs_utils::slugify(project_name));
-    let pointer = crate::utils::markdown::build_vault_pointer_block(&vf, true);
+fn build_initial_agents_md(project_name: &str, vault_folder: &str) -> String {
+    let pointer = crate::utils::markdown::build_vault_pointer_block(vault_folder, true);
     format!(r#"# {project_name} — Agent 工作記憶
 
 > 由 AMAGI Core 自動建立。本檔案記錄此專案的規則、技術棧與注意事項。
@@ -396,9 +398,8 @@ scope: project
 "#, project_name = project_name, pointer = pointer)
 }
 
-fn build_initial_claude_md(project_name: &str) -> String {
-    let vf = format!("projects/{}", fs_utils::slugify(project_name));
-    let pointer = crate::utils::markdown::build_vault_pointer_block(&vf, false);
+fn build_initial_claude_md(project_name: &str, vault_folder: &str) -> String {
+    let pointer = crate::utils::markdown::build_vault_pointer_block(vault_folder, false);
     format!(r#"# {project_name} — Claude 工作規則
 
 > 由 AMAGI Core 自動建立。本檔案記錄 Claude 在此專案應遵守的規則。
@@ -479,6 +480,6 @@ pub fn get_project_info(project: &Project) -> ProjectInfo {
         initialized: Path::new(&project.path).join(".amagi").exists(),
         pending_review_count: 0,
         vault_folder: project.vault_folder.clone()
-            .or_else(|| Some(format!("projects/{}", fs_utils::slugify(&project.name)))),
+            .or_else(|| Some(crate::core::agent_exporter::project_vault_folder(&project.path))),
     }
 }

@@ -3,6 +3,7 @@ use serde::Serialize;
 use tauri::State;
 use crate::{AppError, AppState};
 use crate::core::{skill_library, vault_manager, project_manager};
+use crate::utils::fs_utils;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -46,6 +47,28 @@ pub async fn distribute_skill_library(state: State<'_, AppState>) -> Result<Dist
         .collect();
 
     let res = skill_library::distribute(Path::new(&vault_root), &repos)?;
+    Ok(DistributeResultDto {
+        skill_count: res.skill_count,
+        repo_count: res.repo_count,
+        written_count: res.written.len(),
+    })
+}
+
+/// 把技能庫分發到「全域」skills 目錄（~/.codex/skills、~/.claude/skills）。
+/// 該機所有專案共用，取代手動 cp。
+#[tauri::command]
+pub async fn distribute_skills_global(state: State<'_, AppState>) -> Result<DistributeResultDto, AppError> {
+    let cfg = vault_manager::get_vault_config(&state.data_dir);
+    let vault_root = cfg
+        .vault_path
+        .ok_or_else(|| AppError::InvalidPath("尚未設定 vault 路徑，請先到「設定」指定".into()))?;
+
+    let codex_dir = fs_utils::global_codex_skills_dir()
+        .ok_or_else(|| AppError::Io("無法取得 ~/.codex/skills 路徑".into()))?;
+    let claude_dir = fs_utils::global_claude_skills_dir()
+        .ok_or_else(|| AppError::Io("無法取得 ~/.claude/skills 路徑".into()))?;
+
+    let res = skill_library::distribute_global(Path::new(&vault_root), &codex_dir, &claude_dir)?;
     Ok(DistributeResultDto {
         skill_count: res.skill_count,
         repo_count: res.repo_count,

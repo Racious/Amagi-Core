@@ -107,16 +107,22 @@
     <div class="card p-5 mb-4">
       <div class="font-semibold text-sm mb-1 text-fg">技能庫</div>
       <p class="text-xs text-muted mb-3">
-        vault <code>_skills/</code> 為跨專案技能的單一來源。分發會把技能以原生格式
-        同步到所有已加入專案的 .claude/skills 與 .codex/skills（覆寫受管副本）。
+        vault <code>_skills/</code> 為跨專案技能的單一來源。「分發到所有專案」把技能以原生格式
+        同步到各專案的 .claude/skills 與 .codex/skills；「分發到全域」則寫入本機
+        ~/.codex/skills 與 ~/.claude/skills，該機所有專案共用（皆覆寫受管副本）。
       </p>
       <div class="text-sm mb-3">
         <span class="text-muted">技能庫數量：</span>
         <span class="text-fg">{{ librarySkills.length }}</span>
       </div>
-      <button class="btn btn-primary btn-sm" :disabled="skillBusy" @click="distributeSkills">
-        {{ skillBusy ? '分發中…' : '分發到所有專案' }}
-      </button>
+      <div class="flex gap-2">
+        <button class="btn btn-primary btn-sm" :disabled="skillBusy" @click="distributeSkills">
+          {{ skillBusy ? '分發中…' : '分發到所有專案' }}
+        </button>
+        <button class="btn btn-sm" :disabled="skillBusy" @click="distributeSkillsGlobal">
+          {{ skillBusy ? '分發中…' : '分發到全域（本機共用）' }}
+        </button>
+      </div>
       <p v-if="skillMsg" class="text-xs mt-2" style="color: var(--c-accent);">{{ skillMsg }}</p>
     </div>
 
@@ -241,6 +247,19 @@ async function distributeSkills() {
     skillMsg.value = `已分發 ${r.skillCount} 個技能到 ${r.repoCount} 個專案（寫入 ${r.writtenCount} 檔）。`
   } catch (e: any) {
     skillMsg.value = `分發失敗：${e?.message ?? e}`
+  } finally {
+    skillBusy.value = false
+  }
+}
+
+async function distributeSkillsGlobal() {
+  skillBusy.value = true
+  skillMsg.value = ''
+  try {
+    const r = await api.distributeSkillsGlobal()
+    skillMsg.value = `已分發 ${r.skillCount} 個技能到全域 ~/.codex/skills、~/.claude/skills（寫入 ${r.writtenCount} 檔）。`
+  } catch (e: any) {
+    skillMsg.value = `全域分發失敗：${e?.message ?? e}`
   } finally {
     skillBusy.value = false
   }

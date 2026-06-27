@@ -50,7 +50,7 @@ pub async fn sync_agent_files(
         }
     }
 
-    let mut result = agent_exporter::sync_agent_files(&project.path, &accepted)?;
+    let mut result = agent_exporter::sync_agent_files(&project.path, project.vault_folder.as_deref(), &accepted)?;
     result.project_id = project_id.clone();
 
     // ── 同步完成後標記為 Synced ───────────────────────
@@ -88,7 +88,7 @@ pub async fn preview_sync_diff(
         .filter(|i| i.status == ReviewStatus::Accepted)
         .collect();
 
-    Ok(agent_exporter::preview_sync_diff(&project.path, &accepted))
+    Ok(agent_exporter::preview_sync_diff(&project.path, project.vault_folder.as_deref(), &accepted))
 }
 
 #[cfg(test)]
