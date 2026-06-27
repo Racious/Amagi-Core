@@ -145,6 +145,8 @@ pub fn run() {
             route_document,
             list_library_skills,
             distribute_skills_selective,
+            scan_adoptable_skills,
+            adopt_skills,
         ])
         .run(tauri::generate_context!())
         .expect("AMAGI Core 啟動失敗");
