@@ -5,7 +5,7 @@ use crate::models::sync::{SyncResult, FileDiffPreview};
 use crate::utils::{fs_utils, markdown};
 
 /// 由專案路徑推導 vault 邏輯資料夾名（projects/<slug>），與 Project.vault_folder 預設一致。
-fn project_vault_folder(project_path: &str) -> String {
+pub fn project_vault_folder(project_path: &str) -> String {
     let name = Path::new(project_path)
         .file_name()
         .and_then(|s| s.to_str())
@@ -13,9 +13,12 @@ fn project_vault_folder(project_path: &str) -> String {
     format!("projects/{}", fs_utils::slugify(name))
 }
 
-pub fn sync_agent_files(project_path: &str, accepted: &[ReviewItem]) -> Result<SyncResult, AppError> {
+pub fn sync_agent_files(project_path: &str, vault_folder: Option<&str>, accepted: &[ReviewItem]) -> Result<SyncResult, AppError> {
     let mut written: Vec<String> = Vec::new();
-    let vault_folder = project_vault_folder(project_path);
+    // 優先用顯式 Project.vault_folder（權威來源）；缺時才由路徑 basename 推導。
+    let vault_folder = vault_folder
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| project_vault_folder(project_path));
 
     let memories: Vec<&ReviewItem> = accepted.iter()
         .filter(|i| i.item_type == ReviewItemType::Memory)
@@ -122,9 +125,11 @@ pub fn sync_agent_files(project_path: &str, accepted: &[ReviewItem]) -> Result<S
     })
 }
 
-pub fn preview_sync_diff(project_path: &str, accepted: &[ReviewItem]) -> Vec<FileDiffPreview> {
+pub fn preview_sync_diff(project_path: &str, vault_folder: Option<&str>, accepted: &[ReviewItem]) -> Vec<FileDiffPreview> {
     let mut previews = Vec::new();
-    let vault_folder = project_vault_folder(project_path);
+    let vault_folder = vault_folder
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| project_vault_folder(project_path));
 
     let memories: Vec<ReviewItem> = accepted.iter()
         .filter(|i| i.item_type == ReviewItemType::Memory)

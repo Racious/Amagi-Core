@@ -206,7 +206,7 @@ fn e2e_learn_review_sync_memory() {
     assert!(gate(&accepted).is_empty(), "乾淨記憶不該被卡");
 
     // sync → 落地 AGENTS.md / CLAUDE.md
-    let sync = agent_exporter::sync_agent_files(&sb.repo_str(), &accepted).unwrap();
+    let sync = agent_exporter::sync_agent_files(&sb.repo_str(), project.vault_folder.as_deref(), &accepted).unwrap();
     assert!(sync.written_files.iter().any(|f| f.ends_with("AGENTS.md")));
     assert!(sync.written_files.iter().any(|f| f.ends_with("CLAUDE.md")));
     assert!(sync.blocked_conflicts.is_empty());
@@ -232,6 +232,47 @@ fn e2e_learn_review_sync_memory() {
 }
 
 // ───────────────────────────────────────────────────────────
+// 1b. 自訂 vault_folder 應貫穿 init（發現1 修復回歸測試）
+// ───────────────────────────────────────────────────────────
+#[test]
+fn e2e_custom_vault_folder_in_init_scaffold() {
+    let sb = Sandbox::new("customvf");
+    let mut project = project_manager::add_project(&sb.repo_str(), &sb.data_dir).unwrap();
+    // 模擬自訂/遷移後的 mapping，與 repo basename 不同
+    project.vault_folder = Some("projects/custom-mapping".to_string());
+
+    project_manager::init_project(&project).unwrap();
+    assert!(sb.read("AGENTS.md").contains("projects/custom-mapping/"),
+        "init AGENTS.md 應指向自訂 vault_folder，而非 repo basename");
+    assert!(sb.read("CLAUDE.md").contains("projects/custom-mapping/"),
+        "init CLAUDE.md 應指向自訂 vault_folder");
+}
+
+#[test]
+fn e2e_custom_vault_folder_in_sync() {
+    let sb = Sandbox::new("customvfsync");
+    let project = project_manager::add_project(&sb.repo_str(), &sb.data_dir).unwrap();
+    project_manager::init_project(&project).unwrap();
+
+    let vf = Some("projects/custom-mapping");
+    let mem = mem_item(&project.id, "tech_stack", "Tech Stack", "Rust + Tauri", SyncScope::Project);
+    let rule = mem_item(&project.id, "agent_rule", "Agent 規則", "先驗證再 commit", SyncScope::Project);
+
+    // sync 以自訂 vault_folder 寫出（不退回 basename）
+    let sync = agent_exporter::sync_agent_files(&sb.repo_str(), vf, &[mem.clone(), rule.clone()]).unwrap();
+    assert!(sync.written_files.iter().any(|f| f.ends_with("AGENTS.md")));
+    assert!(sb.read("AGENTS.md").contains("projects/custom-mapping/"),
+        "sync AGENTS.md 應指向自訂 vault_folder");
+    assert!(sb.read("CLAUDE.md").contains("projects/custom-mapping/"),
+        "sync CLAUDE.md 應指向自訂 vault_folder");
+
+    // preview 也應反映自訂 vault_folder
+    let previews = agent_exporter::preview_sync_diff(&sb.repo_str(), vf, &[mem, rule]);
+    assert!(previews.iter().any(|p| p.new_content.contains("projects/custom-mapping/")),
+        "preview new_content 應指向自訂 vault_folder");
+}
+
+// ───────────────────────────────────────────────────────────
 // 3. 技能同步 → .claude/skills、.codex/skills、.amagi/skills 原生格式
 // ───────────────────────────────────────────────────────────
 #[test]
@@ -243,7 +284,7 @@ fn e2e_skill_sync_native_format() {
     let content = "## 描述\n替遊戲狀態加入悔棋功能\n\n## 何時使用\n- 需要撤回上一步\n- 觸發關鍵字：undo、悔棋\n\n## 步驟\n1. 在 store 新增 history 陣列\n2. 實作 undo()";
     let skill = skill_item(&project.id, "新增悔棋功能", content);
 
-    let sync = agent_exporter::sync_agent_files(&sb.repo_str(), std::slice::from_ref(&skill)).unwrap();
+    let sync = agent_exporter::sync_agent_files(&sb.repo_str(), project.vault_folder.as_deref(), std::slice::from_ref(&skill)).unwrap();
     assert!(sync.blocked_conflicts.is_empty());
 
     let slug = fs_utils::slugify(&skill.title);
