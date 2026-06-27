@@ -141,8 +141,7 @@ pub fn run() {
             scan_vault_clips,
             write_wiki_pages,
             list_library_skills,
-            distribute_skill_library,
-            distribute_skills_global,
+            distribute_skills_selective,
         ])
         .run(tauri::generate_context!())
         .expect("AMAGI Core 啟動失敗");

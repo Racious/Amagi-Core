@@ -277,6 +277,6 @@ export const api = {
 
   // ── 技能庫 ────────────────────────────────────────
   listLibrarySkills: () => invoke<LibrarySkill[]>('list_library_skills'),
-  distributeSkillLibrary: () => invoke<DistributeResult>('distribute_skill_library'),
-  distributeSkillsGlobal: () => invoke<DistributeResult>('distribute_skills_global'),
+  distributeSkillsSelective: (selections: { skillSlug: string; target: string }[]) =>
+    invoke<DistributeResult>('distribute_skills_selective', { selections }),
 }

@@ -81,67 +81,51 @@ fn parse_name(content: &str) -> Option<String> {
     None
 }
 
-/// 把技能庫分發到指定 repo 的 `.claude/skills/<slug>/SKILL.md` 與 `.codex/skills/<slug>/SKILL.md`。
-/// 這些是受管副本，分發即覆寫（單一來源 → 多處同步，adr-002 D6）。
-pub fn distribute(vault_root: &Path, repo_paths: &[String]) -> Result<DistributeResult, AppError> {
-    let dir = vault_root.join("_skills");
-    let mut res = DistributeResult::default();
-    if !dir.is_dir() {
-        return Ok(res);
-    }
-
-    let skills = collect_skills(&dir);
-    res.skill_count = skills.len();
-
-    for repo in repo_paths {
-        let repo_path = Path::new(repo);
-        if !repo_path.is_dir() {
-            continue;
-        }
-        res.repo_count += 1;
-        for (slug, content) in &skills {
-            for base in [".claude/skills", ".codex/skills"] {
-                let target = repo_path.join(base).join(slug).join("SKILL.md");
-                if let Some(parent) = target.parent() {
-                    std::fs::create_dir_all(parent).map_err(|e| AppError::Io(e.to_string()))?;
-                }
-                std::fs::write(&target, content).map_err(|e| AppError::Io(e.to_string()))?;
-                res.written.push(target.to_string_lossy().to_string());
-            }
-        }
-    }
-
-    Ok(res)
-}
-
-/// 把技能庫分發到「全域」skills 目錄（~/.codex/skills、~/.claude/skills）。
-/// 目標目錄以參數傳入，便於測試；指令層才解析真實全域路徑。
-pub fn distribute_global(
+/// 選擇性分發：只把指定的「技能 → 目標」配對寫出。
+/// `selections` 每筆為 `(skill_slug, target)`，`target` 為 `"global"` 或某專案路徑。
+/// global → 寫入傳入的 `codex_global` / `claude_global`；專案 → 寫入 `<repo>/.codex,.claude/skills`。
+pub fn distribute_selective(
     vault_root: &Path,
-    codex_skills_dir: &Path,
-    claude_skills_dir: &Path,
+    selections: &[(String, String)],
+    codex_global: &Path,
+    claude_global: &Path,
 ) -> Result<DistributeResult, AppError> {
-    let dir = vault_root.join("_skills");
+    let skills: std::collections::HashMap<String, String> =
+        collect_skills(&vault_root.join("_skills")).into_iter().collect();
+
     let mut res = DistributeResult::default();
-    if !dir.is_dir() {
-        return Ok(res);
-    }
+    let mut seen_skills = std::collections::HashSet::new();
+    let mut seen_targets = std::collections::HashSet::new();
 
-    let skills = collect_skills(&dir);
-    res.skill_count = skills.len();
-    res.repo_count = 2; // 兩個全域目標：codex + claude
-
-    for (slug, content) in &skills {
-        for base in [codex_skills_dir, claude_skills_dir] {
-            let target = base.join(slug).join("SKILL.md");
-            if let Some(parent) = target.parent() {
+    for (slug, target) in selections {
+        // 來源技能須存在且合法（collect_skills 已過 is_valid_skill_slug）
+        let content = match skills.get(slug) {
+            Some(c) => c,
+            None => continue,
+        };
+        let (codex_base, claude_base): (std::path::PathBuf, std::path::PathBuf) = if target == "global" {
+            (codex_global.to_path_buf(), claude_global.to_path_buf())
+        } else {
+            let repo = Path::new(target);
+            if !repo.is_dir() {
+                continue;
+            }
+            (repo.join(".codex").join("skills"), repo.join(".claude").join("skills"))
+        };
+        for base in [codex_base, claude_base] {
+            let dest = base.join(slug).join("SKILL.md");
+            if let Some(parent) = dest.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| AppError::Io(e.to_string()))?;
             }
-            std::fs::write(&target, content).map_err(|e| AppError::Io(e.to_string()))?;
-            res.written.push(target.to_string_lossy().to_string());
+            std::fs::write(&dest, content).map_err(|e| AppError::Io(e.to_string()))?;
+            res.written.push(dest.to_string_lossy().to_string());
         }
+        seen_skills.insert(slug.clone());
+        seen_targets.insert(target.clone());
     }
 
+    res.skill_count = seen_skills.len();
+    res.repo_count = seen_targets.len(); // 此處語意為「目標數」（全域算一個）
     Ok(res)
 }
 
@@ -150,7 +134,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_list_and_distribute() {
+    fn test_list_library_skills() {
         let root = std::env::temp_dir().join(format!("amagi-skilllib-{}", uuid::Uuid::new_v4()));
         let lib = root.join("_skills");
         // 原生目錄式：_skills/commit-flow/SKILL.md
@@ -165,14 +149,6 @@ mod tests {
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].name, "提交流程");
         assert_eq!(listed[0].slug, "commit-flow");
-
-        let repo = root.join("repoA");
-        std::fs::create_dir_all(&repo).unwrap();
-        let res = distribute(&root, &[repo.to_string_lossy().to_string()]).unwrap();
-        assert_eq!(res.skill_count, 1);
-        assert_eq!(res.repo_count, 1);
-        assert!(repo.join(".claude/skills/commit-flow/SKILL.md").exists());
-        assert!(repo.join(".codex/skills/commit-flow/SKILL.md").exists());
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -198,44 +174,62 @@ mod tests {
     }
 
     #[test]
-    fn test_distribute_global() {
-        let root = std::env::temp_dir().join(format!("amagi-glob-{}", uuid::Uuid::new_v4()));
-        let lib = root.join("_skills");
-        std::fs::create_dir_all(lib.join("codex-review")).unwrap();
-        std::fs::write(
-            lib.join("codex-review").join("SKILL.md"),
-            "---\nname: \"審查\"\n---\n內容",
-        )
-        .unwrap();
-
-        let codex = root.join("g_codex");
-        let claude = root.join("g_claude");
-        let res = distribute_global(&root, &codex, &claude).unwrap();
-        assert_eq!(res.skill_count, 1);
-        assert!(codex.join("codex-review/SKILL.md").exists());
-        assert!(claude.join("codex-review/SKILL.md").exists());
-
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn test_distribute_global_skips_reserved_slug() {
+    fn test_distribute_skips_reserved_slug() {
         let root = std::env::temp_dir().join(format!("amagi-dot-{}", uuid::Uuid::new_v4()));
         let lib = root.join("_skills");
-        // dot-prefixed 保留命名空間，不該被分發
+        // dot-prefixed 保留命名空間，collect_skills 應過濾，永不分發
         std::fs::create_dir_all(lib.join(".system")).unwrap();
         std::fs::write(lib.join(".system").join("SKILL.md"), "---\nname: x\n---\n").unwrap();
-        // 正常技能照分發
         std::fs::create_dir_all(lib.join("normal")).unwrap();
         std::fs::write(lib.join("normal").join("SKILL.md"), "---\nname: y\n---\n").unwrap();
 
         let codex = root.join("g_codex");
         let claude = root.join("g_claude");
-        let res = distribute_global(&root, &codex, &claude).unwrap();
+        // 即使刻意選 .system 為目標，也因 collect_skills 過濾而不存在 → 跳過
+        let sel = vec![
+            (".system".to_string(), "global".to_string()),
+            ("normal".to_string(), "global".to_string()),
+        ];
+        let res = distribute_selective(&root, &sel, &codex, &claude).unwrap();
         assert_eq!(res.skill_count, 1, ".system 應被略過，只分發 normal");
         assert!(codex.join("normal/SKILL.md").exists());
         assert!(!codex.join(".system/SKILL.md").exists(), "絕不寫入 .system 保留命名空間");
         assert!(!claude.join(".system/SKILL.md").exists());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_distribute_selective() {
+        let root = std::env::temp_dir().join(format!("amagi-sel-{}", uuid::Uuid::new_v4()));
+        let lib = root.join("_skills");
+        std::fs::create_dir_all(lib.join("alpha")).unwrap();
+        std::fs::write(lib.join("alpha").join("SKILL.md"), "---\nname: a\n---\n").unwrap();
+        std::fs::create_dir_all(lib.join("beta")).unwrap();
+        std::fs::write(lib.join("beta").join("SKILL.md"), "---\nname: b\n---\n").unwrap();
+
+        let codex_global = root.join("g_codex");
+        let claude_global = root.join("g_claude");
+        let repo = root.join("repoA");
+        std::fs::create_dir_all(&repo).unwrap();
+
+        // alpha → global；beta → repoA（各只去各自目標）
+        let sel = vec![
+            ("alpha".to_string(), "global".to_string()),
+            ("beta".to_string(), repo.to_string_lossy().to_string()),
+        ];
+        let res = distribute_selective(&root, &sel, &codex_global, &claude_global).unwrap();
+        assert_eq!(res.skill_count, 2);
+        assert_eq!(res.repo_count, 2); // global + repoA
+
+        // alpha 只進 global、不進 repoA
+        assert!(codex_global.join("alpha/SKILL.md").exists());
+        assert!(claude_global.join("alpha/SKILL.md").exists());
+        assert!(!repo.join(".codex/skills/alpha/SKILL.md").exists());
+        // beta 只進 repoA、不進 global
+        assert!(repo.join(".codex/skills/beta/SKILL.md").exists());
+        assert!(repo.join(".claude/skills/beta/SKILL.md").exists());
+        assert!(!codex_global.join("beta/SKILL.md").exists());
 
         let _ = std::fs::remove_dir_all(&root);
     }
