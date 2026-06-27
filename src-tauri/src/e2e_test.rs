@@ -150,6 +150,15 @@ fn e2e_add_and_init_project() {
 
     // 初始 AGENTS.md / CLAUDE.md 應含「自我分步」紀律
     assert!(sb.read("AGENTS.md").contains("自我分步"));
+
+    // keystone：init 產出的 agent 檔應帶 vault 知識庫指針（Layer 2，路徑無關）
+    let agents_init = sb.read("AGENTS.md");
+    assert!(agents_init.contains("AMAGI-VAULT-PROJECT:BEGIN"), "AGENTS.md 缺 vault 指針");
+    assert!(agents_init.contains("projects/"), "AGENTS.md 指針缺邏輯資料夾名");
+    assert!(agents_init.contains("~/.codex/AGENTS.md"), "AGENTS.md 應引用 Codex 全局錨點");
+    let claude_init = sb.read("CLAUDE.md");
+    assert!(claude_init.contains("AMAGI-VAULT-PROJECT:BEGIN"), "CLAUDE.md 缺 vault 指針");
+    assert!(claude_init.contains("~/.claude/CLAUDE.md"), "CLAUDE.md 應引用 Claude 全局錨點");
     assert!(sb.read("CLAUDE.md").contains("不可跳步"));
 
     // 冪等：再 init 一次不該爆，且不重複建立既有檔

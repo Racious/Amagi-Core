@@ -26,6 +26,11 @@ pub fn global_claude_md_path() -> Option<std::path::PathBuf> {
     dirs::home_dir().map(|h| h.join(".claude").join("CLAUDE.md"))
 }
 
+/// ~/.codex/AGENTS.md（Codex 全域指令）
+pub fn global_codex_agents_md_path() -> Option<std::path::PathBuf> {
+    dirs::home_dir().map(|h| h.join(".codex").join("AGENTS.md"))
+}
+
 pub fn slugify(title: &str) -> String {
     title
         .to_lowercase()

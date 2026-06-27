@@ -41,7 +41,7 @@ pub fn get_vault_config(data_dir: &Path) -> VaultConfig {
 /// 設定本機 vault 路徑：
 /// 1. 驗證資料夾存在
 /// 2. 組受管區塊並過安全過濾
-/// 3. 寫入全局 ~/.claude/CLAUDE.md（僅替換受管區塊，先備份 .bak）
+/// 3. 寫入全局 ~/.claude/CLAUDE.md 與 ~/.codex/AGENTS.md（僅替換受管區塊，先備份 .bak）
 /// 4. 持久化本機設定
 pub fn set_vault_path(path: &str, data_dir: &Path) -> Result<VaultSetResult, AppError> {
     let p = Path::new(path);
@@ -66,7 +66,14 @@ pub fn set_vault_path(path: &str, data_dir: &Path) -> Result<VaultSetResult, App
     let claude_md = fs_utils::global_claude_md_path()
         .ok_or_else(|| AppError::Io("無法取得 ~/.claude/CLAUDE.md 路徑".into()))?;
 
-    let (backup_made, pointer_action) = write_managed_block(&claude_md, &block)?;
+    let (claude_backup, pointer_action) = write_managed_block(&claude_md, &block)?;
+
+    // 同步寫入 Codex 全局錨點 ~/.codex/AGENTS.md（同一受管區塊、同安全機制：只動標記間、.bak、冪等）
+    let codex_backup = match fs_utils::global_codex_agents_md_path() {
+        Some(codex_agents) => write_managed_block(&codex_agents, &block)?.0,
+        None => false,
+    };
+    let backup_made = claude_backup || codex_backup;
 
     let cfg = VaultConfig {
         vault_path: Some(path.to_string()),
