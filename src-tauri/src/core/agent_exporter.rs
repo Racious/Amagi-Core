@@ -4,8 +4,18 @@ use crate::models::review::{ReviewItem, ReviewItemType, SyncScope};
 use crate::models::sync::{SyncResult, FileDiffPreview};
 use crate::utils::{fs_utils, markdown};
 
+/// 由專案路徑推導 vault 邏輯資料夾名（projects/<slug>），與 Project.vault_folder 預設一致。
+fn project_vault_folder(project_path: &str) -> String {
+    let name = Path::new(project_path)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("unknown");
+    format!("projects/{}", fs_utils::slugify(name))
+}
+
 pub fn sync_agent_files(project_path: &str, accepted: &[ReviewItem]) -> Result<SyncResult, AppError> {
     let mut written: Vec<String> = Vec::new();
+    let vault_folder = project_vault_folder(project_path);
 
     let memories: Vec<&ReviewItem> = accepted.iter()
         .filter(|i| i.item_type == ReviewItemType::Memory)
@@ -19,7 +29,7 @@ pub fn sync_agent_files(project_path: &str, accepted: &[ReviewItem]) -> Result<S
             .collect();
         if !project_memories.is_empty() {
             let agents_path = Path::new(project_path).join("AGENTS.md");
-            let content = markdown::build_agents_md(&project_memories);
+            let content = markdown::build_agents_md(&vault_folder, &project_memories);
             markdown::write_with_backup(&agents_path, &content)?;
             written.push(agents_path.to_string_lossy().to_string());
         }
@@ -34,7 +44,7 @@ pub fn sync_agent_files(project_path: &str, accepted: &[ReviewItem]) -> Result<S
                 if let Some(parent) = global_claude.parent() {
                     std::fs::create_dir_all(parent).map_err(|e| AppError::Io(e.to_string()))?;
                 }
-                let content = markdown::build_claude_md(&global_memories);
+                let content = markdown::build_claude_md(None, &global_memories);
                 markdown::write_with_backup(&global_claude, &content)?;
                 written.push(global_claude.to_string_lossy().to_string());
             }
@@ -47,7 +57,7 @@ pub fn sync_agent_files(project_path: &str, accepted: &[ReviewItem]) -> Result<S
             .collect();
         if !agent_rules.is_empty() {
             let claude_path = Path::new(project_path).join("CLAUDE.md");
-            let content = markdown::build_claude_md(&agent_rules);
+            let content = markdown::build_claude_md(Some(&vault_folder), &agent_rules);
             markdown::write_with_backup(&claude_path, &content)?;
             written.push(claude_path.to_string_lossy().to_string());
         }
@@ -114,6 +124,7 @@ pub fn sync_agent_files(project_path: &str, accepted: &[ReviewItem]) -> Result<S
 
 pub fn preview_sync_diff(project_path: &str, accepted: &[ReviewItem]) -> Vec<FileDiffPreview> {
     let mut previews = Vec::new();
+    let vault_folder = project_vault_folder(project_path);
 
     let memories: Vec<ReviewItem> = accepted.iter()
         .filter(|i| i.item_type == ReviewItemType::Memory)
@@ -122,7 +133,7 @@ pub fn preview_sync_diff(project_path: &str, accepted: &[ReviewItem]) -> Vec<Fil
 
     if !memories.is_empty() {
         let agents_path = Path::new(project_path).join("AGENTS.md");
-        let new_content = markdown::build_agents_md(&memories);
+        let new_content = markdown::build_agents_md(&vault_folder, &memories);
         let current = std::fs::read_to_string(&agents_path).ok();
         previews.push(FileDiffPreview {
             file_path: agents_path.to_string_lossy().to_string(),

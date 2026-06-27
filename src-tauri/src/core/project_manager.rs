@@ -333,9 +333,13 @@ const AFTER_TASK_REVIEW_TEMPLATE: &str = r#"# After Task Review（任務完成�
 "#;
 
 fn build_initial_agents_md(project_name: &str) -> String {
+    let vf = format!("projects/{}", fs_utils::slugify(project_name));
+    let pointer = crate::utils::markdown::build_vault_pointer_block(&vf, true);
     format!(r#"# {project_name} — Agent 工作記憶
 
 > 由 AMAGI Core 自動建立。本檔案記錄此專案的規則、技術棧與注意事項。
+
+{pointer}
 
 ## 執行方式：自我分步 + 留下軌跡（重要）
 
@@ -389,13 +393,17 @@ scope: project
 ---
 
 <!-- AMAGI 會在這裡自動插入審核通過的記憶與規則 -->
-"#, project_name = project_name)
+"#, project_name = project_name, pointer = pointer)
 }
 
 fn build_initial_claude_md(project_name: &str) -> String {
+    let vf = format!("projects/{}", fs_utils::slugify(project_name));
+    let pointer = crate::utils::markdown::build_vault_pointer_block(&vf, false);
     format!(r#"# {project_name} — Claude 工作規則
 
 > 由 AMAGI Core 自動建立。本檔案記錄 Claude 在此專案應遵守的規則。
+
+{pointer}
 
 ## 執行方式：自我分步 + 留下軌跡（重要）
 
@@ -449,7 +457,7 @@ scope: project
 ---
 
 <!-- AMAGI 會在這裡自動插入審核通過的規則 -->
-"#, project_name = project_name)
+"#, project_name = project_name, pointer = pointer)
 }
 
 pub fn get_project_info(project: &Project) -> ProjectInfo {
