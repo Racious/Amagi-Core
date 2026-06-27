@@ -19,6 +19,7 @@ use commands::workflow_commands::*;
 use commands::bridge_commands::*;
 use commands::vault_commands::*;
 use commands::wiki_commands::*;
+use commands::doc_router_commands::*;
 use commands::skill_commands::*;
 
 #[derive(Debug, serde::Serialize, thiserror::Error)]
@@ -140,6 +141,8 @@ pub fn run() {
             ingest_wiki_from_file,
             scan_vault_clips,
             write_wiki_pages,
+            preview_document_route,
+            route_document,
             list_library_skills,
             distribute_skills_selective,
         ])

@@ -11,6 +11,7 @@ pub mod workflow_manager;
 pub mod bridge_engine;
 pub mod vault_manager;
 pub mod wiki_exporter;
+pub mod doc_router;
 pub mod clip_scanner;
 pub mod skill_library;
 pub mod vault_git;
