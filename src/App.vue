@@ -1,4 +1,5 @@
 <template>
+  <OnboardingVault v-if="showOnboarding" @done="showOnboarding = false" @skip="showOnboarding = false" />
   <div class="flex h-screen overflow-hidden bg-canvas">
     <aside class="w-60 flex-shrink-0 flex flex-col bg-surface border-r border-border">
       <!-- 品牌 -->
@@ -71,12 +72,15 @@ import { useReviewStore } from './stores/reviewStore'
 import { useProjectStore } from './stores/projectStore'
 import { useTheme } from './composables/useTheme'
 import { useUpdater } from './composables/useUpdater'
+import { api } from './api/tauriCommands'
+import OnboardingVault from './components/OnboardingVault.vue'
 
 const reviewStore = useReviewStore()
 const projectStore = useProjectStore()
 const { activeBase, toggle } = useTheme()
 
 const appVersion = ref('0.1.0')
+const showOnboarding = ref(false)
 const { status: updateStatus, newVersion, progress, checkForUpdate, installUpdate, dismiss } = useUpdater()
 
 const navGroups = [
@@ -110,6 +114,11 @@ const navGroups = [
 
 onMounted(async () => {
   try { appVersion.value = await getVersion() } catch { /* 非 Tauri 環境 */ }
+  // 首次啟動引導（2c）：未設定 vault → 顯示引導 overlay
+  try {
+    const st = await api.getVaultStatus()
+    showOnboarding.value = !st.configured
+  } catch { /* 非 Tauri 環境 */ }
   await projectStore.fetchProjects()
   await reviewStore.fetchItems()
   // 啟動時靜默檢查更新（失敗不打擾；有新版才顯示橫幅）

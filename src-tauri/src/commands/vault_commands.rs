@@ -1,7 +1,7 @@
 use std::path::Path;
 use tauri::State;
 use crate::{AppError, AppState};
-use crate::core::{project_manager, vault_git, vault_manager::{self, VaultConfig, VaultSetResult}};
+use crate::core::{project_manager, vault_git, vault_manager::{self, VaultConfig, VaultSetResult, VaultStatus}};
 use crate::models::project::InitResult;
 
 #[tauri::command]
@@ -15,6 +15,12 @@ pub async fn set_vault_path(
 #[tauri::command]
 pub async fn get_vault_config(state: State<'_, AppState>) -> Result<VaultConfig, AppError> {
     Ok(vault_manager::get_vault_config(&state.data_dir))
+}
+
+/// 首次啟動引導（2c）用：回報 vault 是否已設定、是否已掛 git。
+#[tauri::command]
+pub async fn get_vault_status(state: State<'_, AppState>) -> Result<VaultStatus, AppError> {
+    Ok(vault_manager::get_vault_status(&state.data_dir))
 }
 
 #[tauri::command]
