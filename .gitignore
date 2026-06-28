@@ -14,6 +14,11 @@ dist-ssr
 
 # Claude Code 本機個人設定（不進版控）
 .claude/settings.local.json
+# 派生技能副本：正本在 vault _skills/，由分發複製產生，每台機器自行分發，不進版控（adr-004 單一來源）
+.claude/skills/
+.codex/skills/
+# git worktree 殘留（本機暫時產物，不進版控）
+.claude/worktrees/
 
 # 發版 CI 產物（由 extract-changelog.mjs 產生，不進版控）
 release-body.md
