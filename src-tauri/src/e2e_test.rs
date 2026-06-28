@@ -507,3 +507,71 @@ fn e2e_diff_export_real_git() {
 
     let _ = std::fs::remove_dir_all(&base);
 }
+
+// ───────────────────────────────────────────────────────────
+// 8. 文件路由器：串真實 project + vault config + vault_folder 解析 → 落點
+//    （補 Phase 2e 指令層零實機呼叫缺口；模擬 command 實際呼叫的底層鏈）
+// ───────────────────────────────────────────────────────────
+use crate::core::doc_router;
+use crate::core::vault_manager::{self, VaultConfig};
+use crate::utils::json_store;
+
+#[test]
+fn e2e_doc_router_routes_by_type_through_real_vault_config() {
+    let sb = Sandbox::new("docrouter");
+    // 在 sandbox 內建 temp vault（絕不碰真實 vault/家目錄）
+    let vault = sb.data_dir.join("vault");
+    std::fs::create_dir_all(&vault).unwrap();
+
+    // 模擬指令層：寫 vault.json → get_vault_config 讀回 vault_root（與 set_vault_path 同落點，
+    // 但不寫 ~/.claude、~/.codex，避免污染家目錄）
+    let cfg = VaultConfig {
+        vault_path: Some(vault.to_string_lossy().to_string()),
+        pointer_written: true,
+    };
+    json_store::write_json(&sb.data_dir.join("vault.json"), &cfg).unwrap();
+    let read = vault_manager::get_vault_config(&sb.data_dir);
+    let vault_root = std::path::PathBuf::from(read.vault_path.expect("vault_root 應讀回"));
+
+    // 真實 add_project → 取得 vault_folder；模擬指令層 resolve_project_folder 的 fallback
+    let project = project_manager::add_project(&sb.repo_str(), &sb.data_dir).unwrap();
+    let pf = project
+        .vault_folder
+        .clone()
+        .unwrap_or_else(|| agent_exporter::project_vault_folder(&project.path));
+
+    // adr → 專案 knowledge 桶
+    let adr = "---\ntitle: 測試決策\ntype: adr\n---\n# 內文";
+    let r1 = doc_router::route_document(&vault_root, Some(&pf), adr, None).unwrap();
+    assert!(r1.written && !r1.skipped);
+    assert_eq!(r1.decision.bucket, "knowledge");
+    assert!(r1.destination.starts_with(&format!("{}/knowledge/", pf)));
+    assert!(vault_root.join(&r1.destination).is_file(), "adr 應落地 knowledge 桶");
+
+    // review → 專案 reports 桶
+    let review = "---\ntitle: 某審查\ntype: review\n---\nx";
+    let r2 = doc_router::route_document(&vault_root, Some(&pf), review, None).unwrap();
+    assert_eq!(r2.decision.bucket, "reports");
+    assert!(vault_root.join(&r2.destination).is_file());
+
+    // handoff → 頂層 daily/（不需專案）
+    let handoff = "---\ntitle: 交接\ntype: handoff\n---\nx";
+    let r3 = doc_router::route_document(&vault_root, None, handoff, Some("2026-06-28.md")).unwrap();
+    assert_eq!(r3.destination, "daily/2026-06-28.md");
+    assert!(vault_root.join("daily/2026-06-28.md").is_file());
+
+    // 缺 type → 兜底 knowledge + fallback 標記
+    let notype = "---\ntitle: 無型別\n---\nx";
+    let r4 = doc_router::route_document(&vault_root, Some(&pf), notype, None).unwrap();
+    assert!(r4.decision.is_fallback && r4.decision.bucket == "knowledge");
+
+    // 非破壞：同 adr 再路由一次 → 略過、不覆寫
+    let r5 = doc_router::route_document(&vault_root, Some(&pf), adr, None).unwrap();
+    assert!(r5.skipped && !r5.written);
+
+    // preview 乾跑不寫檔
+    let prev = "---\ntitle: 只預覽\ntype: spec\n---\nx";
+    let (d, dest) = doc_router::preview_route(Some(&pf), prev, None).unwrap();
+    assert_eq!(d.bucket, "knowledge");
+    assert!(!vault_root.join(&dest).exists(), "preview 不應寫檔");
+}
