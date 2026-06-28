@@ -178,6 +178,14 @@ export interface VaultConfig {
   pointerWritten: boolean
 }
 
+export interface VaultStatus {
+  /** 是否已設定 vault 路徑（未設 → 首次啟動引導）。 */
+  configured: boolean
+  vaultPath: string | null
+  /** vault 是否已是 git repo（未掛 → 強烈建議掛 git 保命）。 */
+  isGitRepo: boolean
+}
+
 export interface VaultSetResult {
   vaultPath: string
   looksLikeVault: boolean
@@ -266,6 +274,7 @@ export const api = {
 
   // ── Vault 知識庫 ──────────────────────────────────
   getVaultConfig: () => invoke<VaultConfig>('get_vault_config'),
+  getVaultStatus: () => invoke<VaultStatus>('get_vault_status'),
   setVaultPath: (path: string) => invoke<VaultSetResult>('set_vault_path', { path }),
   vaultGitStatus: () => invoke<string>('vault_git_status'),
   vaultGitPull: () => invoke<string>('vault_git_pull'),

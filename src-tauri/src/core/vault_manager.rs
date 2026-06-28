@@ -38,6 +38,31 @@ pub fn get_vault_config(data_dir: &Path) -> VaultConfig {
     json_store::read_json_or_default(&config_path(data_dir))
 }
 
+/// vault 設定狀態，供首次啟動引導（2c）判斷是否需引導、是否已掛 git（保命）。
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VaultStatus {
+    /// 是否已設定 vault 路徑（未設 → 首次啟動引導）。
+    pub configured: bool,
+    pub vault_path: Option<String>,
+    /// vault 資料夾是否已是 git repo（未掛 → 強烈建議掛 git，adr-004 D1 保命）。
+    pub is_git_repo: bool,
+}
+
+pub fn get_vault_status(data_dir: &Path) -> VaultStatus {
+    let cfg = get_vault_config(data_dir);
+    let is_git_repo = cfg
+        .vault_path
+        .as_deref()
+        .map(fs_utils::is_git_repo)
+        .unwrap_or(false);
+    VaultStatus {
+        configured: cfg.vault_path.is_some(),
+        vault_path: cfg.vault_path,
+        is_git_repo,
+    }
+}
+
 /// 設定本機 vault 路徑：
 /// 1. 驗證資料夾存在
 /// 2. 組受管區塊並過安全過濾
@@ -173,5 +198,37 @@ mod tests {
         let (out, action) = splice_managed_block("", &block);
         assert_eq!(action, "appended");
         assert!(out.contains("# Amagi-Vault 知識庫"));
+    }
+
+    #[test]
+    fn test_get_vault_status() {
+        let base = std::env::temp_dir().join(format!("amagi-vstatus-{}", uuid::Uuid::new_v4()));
+        let data_dir = base.join("data");
+        std::fs::create_dir_all(&data_dir).unwrap();
+
+        // 未設定 → 需引導
+        let st = get_vault_status(&data_dir);
+        assert!(!st.configured && !st.is_git_repo && st.vault_path.is_none());
+
+        // 已設定、但非 git repo → 應提示掛 git
+        let vault = base.join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        json_store::write_json(
+            &config_path(&data_dir),
+            &VaultConfig {
+                vault_path: Some(vault.to_string_lossy().to_string()),
+                pointer_written: true,
+            },
+        )
+        .unwrap();
+        let st = get_vault_status(&data_dir);
+        assert!(st.configured && !st.is_git_repo);
+
+        // 掛上 git → is_git_repo
+        std::fs::create_dir_all(vault.join(".git")).unwrap();
+        let st = get_vault_status(&data_dir);
+        assert!(st.configured && st.is_git_repo);
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

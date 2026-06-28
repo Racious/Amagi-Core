@@ -133,6 +133,7 @@ pub fn run() {
             cancel_bridge_run,
             set_vault_path,
             get_vault_config,
+            get_vault_status,
             init_project_vault,
             vault_git_status,
             vault_git_pull,
