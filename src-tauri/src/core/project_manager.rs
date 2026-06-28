@@ -524,5 +524,7 @@ pub fn get_project_info(project: &Project) -> ProjectInfo {
         pending_review_count: 0,
         vault_folder: project.vault_folder.clone()
             .or_else(|| Some(crate::core::agent_exporter::project_vault_folder(&project.path))),
+        // 與後端 distribute_selective 的 is_dir 判斷一致：路徑被同名檔案取代也算不可分發
+        path_exists: Path::new(&project.path).is_dir(),
     }
 }

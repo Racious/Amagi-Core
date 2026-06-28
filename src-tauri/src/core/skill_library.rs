@@ -30,6 +30,10 @@ pub struct DistributeResult {
     pub skill_count: usize,
     pub repo_count: usize,
     pub written: Vec<String>,
+    /// 被選為目標、但磁碟目錄已不存在/非目錄的專案路徑（去重）。
+    /// 類比 `AdoptResult::missing`：不靜默跳過，回報讓使用者知情（如 projects.json
+    /// 殘留但磁碟目錄已刪的「幽靈專案」）。`global` 永不入此清單。
+    pub invalid_targets: Vec<String>,
 }
 
 /// 收集技能庫中的技能，回傳 (slug, content)。
@@ -114,6 +118,7 @@ pub fn distribute_selective(
     let mut res = DistributeResult::default();
     let mut seen_skills = std::collections::HashSet::new();
     let mut seen_targets = std::collections::HashSet::new();
+    let mut seen_invalid = std::collections::HashSet::new();
 
     for (slug, target) in selections {
         // 來源技能須存在且合法（collect_skills 已過 is_valid_skill_slug）
@@ -126,6 +131,10 @@ pub fn distribute_selective(
         } else {
             let repo = Path::new(target);
             if !repo.is_dir() {
+                // 目標目錄不存在/非目錄 → 不靜默跳過，記入回報（每目標只記一次）。
+                if seen_invalid.insert(target.clone()) {
+                    res.invalid_targets.push(target.clone());
+                }
                 continue;
             }
             (repo.join(".codex").join("skills"), repo.join(".claude").join("skills"))
@@ -508,6 +517,44 @@ mod tests {
         assert!(repo.join(".codex/skills/beta/SKILL.md").exists());
         assert!(repo.join(".claude/skills/beta/SKILL.md").exists());
         assert!(!codex_global.join("beta/SKILL.md").exists());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_distribute_reports_invalid_targets() {
+        let root = std::env::temp_dir().join(format!("amagi-inv-{}", uuid::Uuid::new_v4()));
+        let lib = root.join("_skills");
+        std::fs::create_dir_all(lib.join("alpha")).unwrap();
+        std::fs::write(lib.join("alpha").join("SKILL.md"), "---\nname: a\n---\n").unwrap();
+
+        let codex_global = root.join("g_codex");
+        let claude_global = root.join("g_claude");
+        // 正常專案存在
+        let live = root.join("live-repo");
+        std::fs::create_dir_all(&live).unwrap();
+        // 幽靈專案：projects.json 有記錄但磁碟目錄不存在
+        let ghost = root.join("ghost-repo");
+        let ghost_target = ghost.to_string_lossy().to_string();
+
+        // alpha → live、ghost、global；ghost 目錄不存在 → 應入 invalid_targets
+        // 同一 ghost 選兩次（不同技能）仍只記一筆（去重）
+        let sel = vec![
+            ("alpha".to_string(), live.to_string_lossy().to_string()),
+            ("alpha".to_string(), ghost_target.clone()),
+            ("alpha".to_string(), "global".to_string()),
+        ];
+        let res = distribute_selective(&root, &sel, &codex_global, &claude_global).unwrap();
+
+        // 幽靈目標被回報、且不靜默
+        assert_eq!(res.invalid_targets, vec![ghost_target.clone()]);
+        // global 與正常專案行為不變：照常寫入、計入 repo_count，不混入 invalid
+        assert_eq!(res.repo_count, 2, "live + global 兩個有效目標");
+        assert!(codex_global.join("alpha/SKILL.md").exists());
+        assert!(live.join(".codex/skills/alpha/SKILL.md").exists());
+        assert!(live.join(".claude/skills/alpha/SKILL.md").exists());
+        // 幽靈目標完全沒被寫出（目錄不存在，亦未被建立）
+        assert!(!ghost.exists());
 
         let _ = std::fs::remove_dir_all(&root);
     }
