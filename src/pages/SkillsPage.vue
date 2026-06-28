@@ -307,6 +307,9 @@ async function applyDistribution() {
   justify-content: space-between;
   gap: 0.75rem;
   cursor: pointer;
+  /* 框住內部 .sr-only checkbox（position:absolute）：否則它停在文檔靜態位置、
+     以 html 為包含塊，把 html scrollHeight 撐大而多長一條捲軸 */
+  position: relative;
 }
 
 /* 開關 switch */

@@ -219,6 +219,9 @@
 html, body {
   background-color: var(--c-canvas);
   color: var(--c-fg);
+  /* reset 瀏覽器預設 body margin：否則 h-screen(100vh) + body margin 會溢出視窗，多長一條捲軸 */
+  margin: 0;
+  height: 100%;
 }
 
 body {
