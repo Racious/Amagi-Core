@@ -1,8 +1,8 @@
 use tauri::State;
 use crate::{AppError, AppState};
 use crate::models::sync::{SyncResult, FileDiffPreview, ItemConflict};
-use crate::models::review::{ReviewStatus, ReviewItem};
-use crate::core::{project_manager, review_queue, agent_exporter, conflict_filter};
+use crate::models::review::{ReviewStatus, ReviewItem, ReviewItemType, SyncScope};
+use crate::core::{project_manager, review_queue, agent_exporter, conflict_filter, vault_manager};
 
 /// 掃描待同步項目，回傳偵測到衝突的項目
 fn scan_item_conflicts(items: &[ReviewItem]) -> Vec<ItemConflict> {
@@ -33,8 +33,16 @@ pub async fn sync_agent_files(
         .ok_or_else(|| AppError::ProjectNotFound(project_id.clone()))?;
 
     let all_items = review_queue::list_items(&data_dir, Some(&project_id));
-    let accepted: Vec<_> = all_items.into_iter()
+    let accepted: Vec<ReviewItem> = all_items.iter()
         .filter(|i| i.status == ReviewStatus::Accepted)
+        .cloned()
+        .collect();
+    // Phase 3a：專案層記憶以 Accepted+Synced 全集寫進 vault（含既有，非破壞）
+    let all_project_memory: Vec<ReviewItem> = all_items.iter()
+        .filter(|i| i.item_type == ReviewItemType::Memory
+            && i.sync_scope == SyncScope::Project
+            && matches!(i.status, ReviewStatus::Accepted | ReviewStatus::Synced))
+        .cloned()
         .collect();
 
     // ── 衝突卡控：除非 force 放行，否則偵測到衝突就擋下（不寫任何檔）──
@@ -50,11 +58,28 @@ pub async fn sync_agent_files(
         }
     }
 
-    let mut result = agent_exporter::sync_agent_files(&project.path, project.vault_folder.as_deref(), &accepted)?;
+    let vault_root = vault_manager::get_vault_config(&data_dir).vault_path;
+    // Phase 3a hard gate（Codex #1）：有專案記憶但 vault 未設 → 拒絕，
+    // 避免專案記憶無落點卻仍被標 Synced（資料遺失）。
+    if !all_project_memory.is_empty() && vault_root.is_none() {
+        return Err(AppError::InvalidPath(
+            "尚未設定 vault 路徑：專案記憶需寫入 vault，請先到「設定」指定 vault 資料夾".into()));
+    }
+    let mut result = agent_exporter::sync_agent_files(
+        &project.path,
+        project.vault_folder.as_deref(),
+        vault_root.as_deref().map(std::path::Path::new),
+        &accepted,
+        &all_project_memory,
+    )?;
     result.project_id = project_id.clone();
 
     // ── 同步完成後標記為 Synced ───────────────────────
-    let synced_ids: Vec<String> = accepted.iter().map(|i| i.id.clone()).collect();
+    // 全域 scope 記憶 3a 未處理（延 3b）→ 不標 Synced，留 Accepted 不遺失（Codex #2）
+    let synced_ids: Vec<String> = accepted.iter()
+        .filter(|i| !(i.item_type == ReviewItemType::Memory && i.sync_scope == SyncScope::Global))
+        .map(|i| i.id.clone())
+        .collect();
     review_queue::mark_synced(&data_dir, &synced_ids)?;
 
     // ── 歸檔已同步的 pending 技能檔 ──────────────────
@@ -84,11 +109,31 @@ pub async fn preview_sync_diff(
         .ok_or_else(|| AppError::ProjectNotFound(project_id.clone()))?;
 
     let all_items = review_queue::list_items(&data_dir, Some(&project_id));
-    let accepted: Vec<_> = all_items.into_iter()
+    let accepted: Vec<ReviewItem> = all_items.iter()
         .filter(|i| i.status == ReviewStatus::Accepted)
+        .cloned()
         .collect();
+    let all_project_memory: Vec<ReviewItem> = all_items.iter()
+        .filter(|i| i.item_type == ReviewItemType::Memory
+            && i.sync_scope == SyncScope::Project
+            && matches!(i.status, ReviewStatus::Accepted | ReviewStatus::Synced))
+        .cloned()
+        .collect();
+    let vault_root = vault_manager::get_vault_config(&data_dir).vault_path;
+    // 與 sync 一致的 hard gate（Codex 追審 #B）：vault 未設 + 有專案記憶 → preview 也報錯，
+    // 不讓 preview 看似可執行、實際 sync 才失敗。
+    if !all_project_memory.is_empty() && vault_root.is_none() {
+        return Err(AppError::InvalidPath(
+            "尚未設定 vault 路徑：專案記憶需寫入 vault，請先到「設定」指定 vault 資料夾".into()));
+    }
 
-    Ok(agent_exporter::preview_sync_diff(&project.path, project.vault_folder.as_deref(), &accepted))
+    Ok(agent_exporter::preview_sync_diff(
+        &project.path,
+        project.vault_folder.as_deref(),
+        vault_root.as_deref().map(std::path::Path::new),
+        &accepted,
+        &all_project_memory,
+    ))
 }
 
 #[cfg(test)]
