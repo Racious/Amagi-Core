@@ -5,6 +5,10 @@ use crate::AppError;
 pub struct LibrarySkill {
     pub slug: String,
     pub name: String,
+    /// 完整 SKILL.md 內容（供詳情跳窗）。
+    pub content: String,
+    /// 是否已分發到全域（~/.codex/skills 或 ~/.claude/skills 任一存在）。
+    pub distributed_global: bool,
 }
 
 /// 可收編進 vault 的候選技能（散落各處、vault `_skills/` 尚無者）。
@@ -33,6 +37,18 @@ pub struct DistributeResult {
     /// 被選為目標、但磁碟目錄已不存在/非目錄的專案路徑（去重）。
     /// 類比 `AdoptResult::missing`：不靜默跳過，回報讓使用者知情（如 projects.json
     /// 殘留但磁碟目錄已刪的「幽靈專案」）。`global` 永不入此清單。
+    pub invalid_targets: Vec<String>,
+}
+
+#[derive(Default)]
+pub struct UndistributeResult {
+    /// 已移除的目標目錄路徑（每個 base/slug 一筆）。
+    pub removed: Vec<String>,
+    /// 實際有移除到東西的技能數（去重）。
+    pub skill_count: usize,
+    /// 實際有移除到東西的目標數（去重；global 算一個）。
+    pub target_count: usize,
+    /// 被選為目標、但磁碟目錄已不存在/非目錄的專案路徑（去重）。
     pub invalid_targets: Vec<String>,
 }
 
@@ -99,11 +115,20 @@ fn collect_skills(dir: &Path) -> Vec<(String, String)> {
 
 /// 列出技能庫（vault `_skills/`）中的技能。
 pub fn list_library_skills(vault_root: &Path) -> Vec<LibrarySkill> {
+    let codex = crate::utils::fs_utils::global_codex_skills_dir();
+    let claude = crate::utils::fs_utils::global_claude_skills_dir();
+    let in_global = |slug: &str| {
+        let hit = |d: &Option<PathBuf>| d.as_ref()
+            .map(|p| p.join(slug).join("SKILL.md").is_file())
+            .unwrap_or(false);
+        hit(&codex) || hit(&claude)
+    };
     collect_skills(&vault_root.join("_skills"))
         .into_iter()
         .map(|(slug, content)| {
             let name = parse_name(&content).unwrap_or_else(|| slug.clone());
-            LibrarySkill { slug, name }
+            let distributed_global = in_global(&slug);
+            LibrarySkill { slug, name, content, distributed_global }
         })
         .collect()
 }
@@ -167,6 +192,94 @@ pub fn distribute_selective(
 
     res.skill_count = seen_skills.len();
     res.repo_count = seen_targets.len(); // 此處語意為「目標數」（全域算一個）
+    Ok(res)
+}
+
+/// 某技能是否已分發到指定專案目錄（`<repo>/.codex/skills/<slug>/SKILL.md`
+/// 或 `.claude` 任一存在）。供前端呈現「此技能目前分發到哪些專案」。
+pub fn skill_in_project(repo: &Path, slug: &str) -> bool {
+    if !is_valid_skill_slug(slug) {
+        return false;
+    }
+    repo.join(".codex").join("skills").join(slug).join("SKILL.md").is_file()
+        || repo.join(".claude").join("skills").join(slug).join("SKILL.md").is_file()
+}
+
+/// 選擇性移除分發：把指定的「技能 → 目標」配對從目標的 skills 目錄移除。
+/// 與 `distribute_selective` 對稱（取消分發）。`target` 為 `"global"` 或某專案路徑。
+///
+/// 安全（此為唯一的刪除表面，需嚴守）：
+/// - `slug` 須通過 `is_valid_skill_slug`（非空、非 dot-prefixed、不含路徑分隔），
+///   杜絕 `..`、絕對路徑、保留命名空間穿越。
+/// - 只移除 `<base>/<slug>` 這**一層**目錄；`base` 由呼叫端白名單（global 或已註冊專案）。
+/// - 目標若為 symlink/junction → 只移除連結本身、不遞迴其指向（避免刪到連結外部目標）。
+pub fn undistribute_selective(
+    selections: &[(String, String)],
+    codex_global: &Path,
+    claude_global: &Path,
+) -> Result<UndistributeResult, AppError> {
+    let mut res = UndistributeResult::default();
+    let mut seen_skills = std::collections::HashSet::new();
+    let mut seen_targets = std::collections::HashSet::new();
+    let mut seen_invalid = std::collections::HashSet::new();
+
+    for (slug, target) in selections {
+        // slug 防護：非法（含 .. / 路徑分隔 / dot-prefixed）一律不碰。
+        if !is_valid_skill_slug(slug) {
+            continue;
+        }
+        let (codex_base, claude_base): (PathBuf, PathBuf) = if target == "global" {
+            (codex_global.to_path_buf(), claude_global.to_path_buf())
+        } else {
+            let repo = Path::new(target);
+            if !repo.is_dir() {
+                if seen_invalid.insert(target.clone()) {
+                    res.invalid_targets.push(target.clone());
+                }
+                continue;
+            }
+            (repo.join(".codex").join("skills"), repo.join(".claude").join("skills"))
+        };
+        let mut removed_any = false;
+        for base in [codex_base, claude_base] {
+            let dir = base.join(slug);
+            // 防衛性核對：最終層級必為 slug、parent 必為 base（slug 已驗證無分隔符，理應恆成立）。
+            if dir.file_name().and_then(|s| s.to_str()) != Some(slug.as_str())
+                || dir.parent() != Some(base.as_path())
+            {
+                continue;
+            }
+            match std::fs::symlink_metadata(&dir) {
+                Ok(meta) => {
+                    if meta.file_type().is_symlink() {
+                        // 只拆連結本身，不遞迴其指向目標（dir-symlink/junction 走 remove_dir、
+                        // file-symlink 走 remove_file）。須檢查結果：成功才計入；NotFound 視為
+                        // 冪等略過；其餘錯誤如實回報，避免「顯示已移除、磁碟仍在」的失真（Codex 低）。
+                        match std::fs::remove_dir(&dir).or_else(|_| std::fs::remove_file(&dir)) {
+                            Ok(()) => {
+                                res.removed.push(dir.to_string_lossy().to_string());
+                                removed_any = true;
+                            }
+                            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                            Err(e) => return Err(AppError::Io(e.to_string())),
+                        }
+                    } else if meta.is_dir() {
+                        std::fs::remove_dir_all(&dir).map_err(|e| AppError::Io(e.to_string()))?;
+                        res.removed.push(dir.to_string_lossy().to_string());
+                        removed_any = true;
+                    }
+                }
+                Err(_) => {} // 不存在 → 本就無分發，略過（冪等）
+            }
+        }
+        if removed_any {
+            seen_skills.insert(slug.clone());
+            seen_targets.insert(target.clone());
+        }
+    }
+
+    res.skill_count = seen_skills.len();
+    res.target_count = seen_targets.len();
     Ok(res)
 }
 
@@ -619,6 +732,141 @@ mod tests {
         assert!(live.join(".claude/skills/alpha/SKILL.md").exists());
         // 幽靈目標完全沒被寫出（目錄不存在，亦未被建立）
         assert!(!ghost.exists());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_skill_in_project() {
+        let root = std::env::temp_dir().join(format!("amagi-inproj-{}", uuid::Uuid::new_v4()));
+        let repo = root.join("repoA");
+        // codex 有 alpha、claude 有 beta、無 gamma
+        std::fs::create_dir_all(repo.join(".codex/skills/alpha")).unwrap();
+        std::fs::write(repo.join(".codex/skills/alpha/SKILL.md"), "x").unwrap();
+        std::fs::create_dir_all(repo.join(".claude/skills/beta")).unwrap();
+        std::fs::write(repo.join(".claude/skills/beta/SKILL.md"), "x").unwrap();
+
+        assert!(skill_in_project(&repo, "alpha"), "codex 有 → true");
+        assert!(skill_in_project(&repo, "beta"), "claude 有 → true");
+        assert!(!skill_in_project(&repo, "gamma"), "都沒有 → false");
+        // 非法 slug 一律 false（不碰路徑）
+        assert!(!skill_in_project(&repo, "../escape"));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_undistribute_removes_only_targeted_slug() {
+        let root = std::env::temp_dir().join(format!("amagi-undist-{}", uuid::Uuid::new_v4()));
+        let codex_g = root.join("g_codex");
+        let claude_g = root.join("g_claude");
+        let repo = root.join("repoA");
+
+        // 先佈好：global 有 alpha、beta；repoA 有 alpha
+        for base in [&codex_g, &claude_g] {
+            std::fs::create_dir_all(base.join("alpha")).unwrap();
+            std::fs::write(base.join("alpha/SKILL.md"), "a").unwrap();
+            std::fs::create_dir_all(base.join("beta")).unwrap();
+            std::fs::write(base.join("beta/SKILL.md"), "b").unwrap();
+        }
+        for sub in [".codex/skills", ".claude/skills"] {
+            std::fs::create_dir_all(repo.join(sub).join("alpha")).unwrap();
+            std::fs::write(repo.join(sub).join("alpha/SKILL.md"), "a").unwrap();
+        }
+
+        // 移除 global 的 alpha + repoA 的 alpha；beta 不動
+        let sel = vec![
+            ("alpha".to_string(), "global".to_string()),
+            ("alpha".to_string(), repo.to_string_lossy().to_string()),
+        ];
+        let res = undistribute_selective(&sel, &codex_g, &claude_g).unwrap();
+        assert_eq!(res.skill_count, 1);
+        assert_eq!(res.target_count, 2, "global + repoA");
+
+        // alpha 全沒了
+        assert!(!codex_g.join("alpha").exists());
+        assert!(!claude_g.join("alpha").exists());
+        assert!(!repo.join(".codex/skills/alpha").exists());
+        assert!(!repo.join(".claude/skills/alpha").exists());
+        // beta（未指定）原封不動
+        assert!(codex_g.join("beta/SKILL.md").exists());
+        assert!(claude_g.join("beta/SKILL.md").exists());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_undistribute_is_idempotent_and_guards_slug() {
+        let root = std::env::temp_dir().join(format!("amagi-undist2-{}", uuid::Uuid::new_v4()));
+        let codex_g = root.join("g_codex");
+        let claude_g = root.join("g_claude");
+        std::fs::create_dir_all(&codex_g).unwrap();
+        std::fs::create_dir_all(&claude_g).unwrap();
+        // 旁置一個「不該被碰」的目錄，驗證非法 slug 不會穿越刪除
+        std::fs::create_dir_all(codex_g.join("keep")).unwrap();
+        std::fs::write(codex_g.join("keep/SKILL.md"), "k").unwrap();
+
+        // 不存在的 slug → 冪等、不報錯、零移除
+        let res = undistribute_selective(
+            &[("ghost".to_string(), "global".to_string())],
+            &codex_g,
+            &claude_g,
+        )
+        .unwrap();
+        assert_eq!(res.skill_count, 0);
+        assert!(res.removed.is_empty());
+
+        // 非法 slug（路徑穿越）→ 被 is_valid_skill_slug 擋，keep 不受影響
+        let res2 = undistribute_selective(
+            &[("../keep".to_string(), "global".to_string()), (".system".to_string(), "global".to_string())],
+            &codex_g,
+            &claude_g,
+        )
+        .unwrap();
+        assert!(res2.removed.is_empty(), "非法 slug 不得移除任何東西");
+        assert!(codex_g.join("keep/SKILL.md").exists(), "旁置目錄不被穿越刪除");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_undistribute_symlink_removes_link_only() {
+        // 取消分發遇到 symlink/junction 時，只拆連結本身、不遞迴刪其指向 target。
+        // symlink 建立需權限（Windows 未開開發者模式會失敗）→ 建不成則略過，
+        // 不讓測試在無權限環境誤判失敗。
+        let root = std::env::temp_dir().join(format!("amagi-undist-sym-{}", uuid::Uuid::new_v4()));
+        let codex_g = root.join("g_codex");
+        let claude_g = root.join("g_claude");
+        std::fs::create_dir_all(&codex_g).unwrap();
+        std::fs::create_dir_all(&claude_g).unwrap();
+        // 連結指向的外部 target，內含不該被刪的檔
+        let target = root.join("external");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("keep.txt"), "k").unwrap();
+
+        let link = codex_g.join("alpha");
+        #[cfg(windows)]
+        let made = std::os::windows::fs::symlink_dir(&target, &link).is_ok();
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink(&target, &link).is_ok();
+        if !made {
+            eprintln!("跳過 test_undistribute_symlink_removes_link_only：無權限建 symlink");
+            let _ = std::fs::remove_dir_all(&root);
+            return;
+        }
+
+        let res = undistribute_selective(
+            &[("alpha".to_string(), "global".to_string())],
+            &codex_g,
+            &claude_g,
+        )
+        .unwrap();
+
+        // 連結已被移除（symlink_metadata 找不到）
+        assert!(std::fs::symlink_metadata(&link).is_err(), "symlink 連結本身應被移除");
+        // 但指向的 target 內容原封不動（沒被遞迴刪）
+        assert!(target.join("keep.txt").exists(), "不得遞迴刪除連結指向的外部 target");
+        assert!(res.removed.iter().any(|p| p.contains("alpha")), "成功移除才計入 removed");
 
         let _ = std::fs::remove_dir_all(&root);
     }

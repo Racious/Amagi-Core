@@ -70,6 +70,7 @@ import { getVersion } from '@tauri-apps/api/app'
 import { RouterLink, RouterView } from 'vue-router'
 import { useReviewStore } from './stores/reviewStore'
 import { useProjectStore } from './stores/projectStore'
+import { useSkillStore } from './stores/skillStore'
 import { useTheme } from './composables/useTheme'
 import { useUpdater } from './composables/useUpdater'
 import { api } from './api/tauriCommands'
@@ -77,6 +78,7 @@ import OnboardingVault from './components/OnboardingVault.vue'
 
 const reviewStore = useReviewStore()
 const projectStore = useProjectStore()
+const skillStore = useSkillStore()
 const { activeBase, toggle } = useTheme()
 
 const appVersion = ref('0.1.0')
@@ -121,6 +123,8 @@ onMounted(async () => {
   } catch { /* 非 Tauri 環境 */ }
   await projectStore.fetchProjects()
   await reviewStore.fetchItems()
+  // 預熱技能庫快取，讓首次進「技能管理」也免載入殘影（非阻塞、失敗不打擾）
+  skillStore.fetchLibrary().catch(() => { /* 未設 vault 等情況 → 進頁時再抓 */ })
   // 啟動時靜默檢查更新（失敗不打擾；有新版才顯示橫幅）
   checkForUpdate(true)
 })

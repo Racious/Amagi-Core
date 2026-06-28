@@ -10,6 +10,10 @@ use crate::utils::fs_utils;
 pub struct LibrarySkillDto {
     pub slug: String,
     pub name: String,
+    pub content: String,
+    pub distributed_global: bool,
+    /// 目前已分發到的專案路徑（`<repo>/.codex,.claude/skills/<slug>` 任一存在）。
+    pub distributed_projects: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -29,9 +33,24 @@ pub async fn list_library_skills(state: State<'_, AppState>) -> Result<Vec<Libra
         Some(v) => v,
         None => return Ok(vec![]),
     };
+    // 已註冊專案：用來判定每個技能目前分發到哪些專案目錄（供前端透鏡式分發頁）。
+    let projects = project_manager::list_projects(&state.data_dir);
     Ok(skill_library::list_library_skills(Path::new(&vault_root))
         .into_iter()
-        .map(|s| LibrarySkillDto { slug: s.slug, name: s.name })
+        .map(|s| {
+            let distributed_projects = projects
+                .iter()
+                .filter(|p| skill_library::skill_in_project(Path::new(&p.path), &s.slug))
+                .map(|p| p.path.clone())
+                .collect();
+            LibrarySkillDto {
+                slug: s.slug,
+                name: s.name,
+                content: s.content,
+                distributed_global: s.distributed_global,
+                distributed_projects,
+            }
+        })
         .collect())
 }
 
@@ -170,6 +189,47 @@ pub async fn distribute_skills_selective(
         skill_count: res.skill_count,
         repo_count: res.repo_count,
         written_count: res.written.len(),
+        invalid_targets: res.invalid_targets,
+    })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UndistributeResultDto {
+    pub skill_count: usize,
+    pub target_count: usize,
+    pub removed_count: usize,
+    pub invalid_targets: Vec<String>,
+}
+
+/// 選擇性移除分發（取消）：把前端勾選的「技能 × 目標」配對從目標移除。
+/// 與 `distribute_skills_selective` 對稱，沿用同一白名單（只允許 "global" 與已註冊專案路徑），
+/// 杜絕對未註冊目錄施行刪除。slug 防護由核心 `undistribute_selective` 把關。
+#[tauri::command]
+pub async fn undistribute_skills(
+    selections: Vec<SkillSelectionDto>,
+    state: State<'_, AppState>,
+) -> Result<UndistributeResultDto, AppError> {
+    let data_dir = state.data_dir.clone();
+    let codex_dir = fs_utils::global_codex_skills_dir()
+        .ok_or_else(|| AppError::Io("無法取得 ~/.codex/skills 路徑".into()))?;
+    let claude_dir = fs_utils::global_claude_skills_dir()
+        .ok_or_else(|| AppError::Io("無法取得 ~/.claude/skills 路徑".into()))?;
+
+    let allowed: std::collections::HashSet<String> = project_manager::list_projects(&data_dir)
+        .into_iter()
+        .map(|p| p.path)
+        .collect();
+    let pairs: Vec<(String, String)> = selections
+        .into_iter()
+        .filter(|s| s.target == "global" || allowed.contains(&s.target))
+        .map(|s| (s.skill_slug, s.target))
+        .collect();
+    let res = skill_library::undistribute_selective(&pairs, &codex_dir, &claude_dir)?;
+    Ok(UndistributeResultDto {
+        skill_count: res.skill_count,
+        target_count: res.target_count,
+        removed_count: res.removed.len(),
         invalid_targets: res.invalid_targets,
     })
 }

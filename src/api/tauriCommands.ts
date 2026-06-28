@@ -210,6 +210,19 @@ export interface WikiWriteResult {
 export interface LibrarySkill {
   slug: string
   name: string
+  /** 完整 SKILL.md 內容（供詳情跳窗）。 */
+  content: string
+  /** 是否已分發到全域（~/.codex/skills 或 ~/.claude/skills）。 */
+  distributedGlobal: boolean
+  /** 目前已分發到的專案路徑（<repo>/.codex,.claude/skills/<slug> 任一存在）。 */
+  distributedProjects: string[]
+}
+
+export interface UndistributeResult {
+  skillCount: number
+  targetCount: number
+  removedCount: number
+  invalidTargets: string[]
 }
 
 export interface DistributeResult {
@@ -294,4 +307,6 @@ export const api = {
   listLibrarySkills: () => invoke<LibrarySkill[]>('list_library_skills'),
   distributeSkillsSelective: (selections: { skillSlug: string; target: string }[]) =>
     invoke<DistributeResult>('distribute_skills_selective', { selections }),
+  undistributeSkills: (selections: { skillSlug: string; target: string }[]) =>
+    invoke<UndistributeResult>('undistribute_skills', { selections }),
 }

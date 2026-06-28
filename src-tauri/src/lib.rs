@@ -147,6 +147,7 @@ pub fn run() {
             route_document,
             list_library_skills,
             distribute_skills_selective,
+            undistribute_skills,
             scan_adoptable_skills,
             adopt_skills,
         ])
