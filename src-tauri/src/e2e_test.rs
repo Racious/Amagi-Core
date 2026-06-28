@@ -575,3 +575,37 @@ fn e2e_doc_router_routes_by_type_through_real_vault_config() {
     assert_eq!(d.bucket, "knowledge");
     assert!(!vault_root.join(&dest).exists(), "preview 不應寫檔");
 }
+
+// ───────────────────────────────────────────────────────────
+// 9. init_project_vault 建三桶（2e-後：產生器改建 knowledge/reports，不再回退舊 pages/）
+// ───────────────────────────────────────────────────────────
+#[test]
+fn e2e_init_project_vault_builds_three_buckets() {
+    let sb = Sandbox::new("vaultinit");
+    let vault = sb.data_dir.join("vault");
+    std::fs::create_dir_all(&vault).unwrap();
+
+    let mut project = project_manager::add_project(&sb.repo_str(), &sb.data_dir).unwrap();
+    project.vault_folder = Some("projects/test-proj".to_string());
+
+    let res = project_manager::init_project_vault(&project, &vault).unwrap();
+    let base = vault.join("projects/test-proj");
+
+    // 三桶：knowledge/、reports/ 主動建（含 .gitkeep）；不再建舊 pages/ 結構
+    assert!(base.join("knowledge").is_dir(), "應建 knowledge/ 桶");
+    assert!(base.join("reports").is_dir(), "應建 reports/ 桶");
+    assert!(base.join("knowledge/.gitkeep").exists());
+    assert!(base.join("reports/.gitkeep").exists());
+    assert!(!base.join("pages").exists(), "不再建舊 pages/ 結構（2e-後 修正）");
+    assert!(res.created_dirs.iter().any(|d| d.ends_with("knowledge")));
+
+    // index.md 為三桶表，不含舊 pages 表
+    let idx = std::fs::read_to_string(base.join("index.md")).unwrap();
+    assert!(idx.contains("三桶"), "index 應為三桶結構說明");
+    assert!(idx.contains("knowledge/") && idx.contains("reports/"));
+    assert!(!idx.contains("pages/adr"), "index 不再含舊 pages 表");
+
+    // 非破壞冪等：再 init 一次不重建目錄
+    let res2 = project_manager::init_project_vault(&project, &vault).unwrap();
+    assert!(res2.created_dirs.is_empty(), "二次 init 不應重建桶");
+}

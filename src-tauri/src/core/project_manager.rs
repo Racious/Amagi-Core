@@ -209,7 +209,9 @@ pub fn init_project_vault(project: &Project, vault_root: &Path) -> Result<InitRe
     let mut created_dirs = Vec::new();
     let mut created_files = Vec::new();
 
-    for sub in ["pages/adr", "pages/specs", "pages/business"] {
+    // 三桶結構（adr-004 D3）：knowledge/、reports/ 主動建；agent/ 按需（記憶/指針寫入時才生）。
+    // 資料夾按「用途」分（固定），內容種類靠 frontmatter `type` 細分。
+    for sub in ["knowledge", "reports"] {
         let d = base.join(sub);
         if !d.exists() {
             std::fs::create_dir_all(&d).map_err(|e| AppError::Io(e.to_string()))?;
@@ -245,11 +247,15 @@ fn build_project_index_md(name: &str) -> String {
 
 ## 知識頁面
 
-| 分類 | 目錄 | 內容 |
+> 三桶結構（adr-004 D3）：資料夾按「用途」分（固定），內容種類靠 frontmatter `type`（可增）。
+
+| 桶 | 目錄 | 裝什麼 |
 |------|------|------|
-| 架構決策 | pages/adr | 技術選型、設計決策紀錄 |
-| 介面規格 | pages/specs | command 與 API 規格 |
-| 商業邏輯 | pages/business | 功能流程說明 |
+| 知識 | [knowledge/](knowledge/) | 人看、可發布 docs/（`type`: adr/spec/business/concept/troubleshooting）|
+| 報告 | [reports/](reports/) | 稽核紀錄（`type`: test-report/review）|
+| AI 私有 | agent/ | 長期記憶、指針（按需建立）|
+
+（交接 handoff → 頂層 `daily/`，不另開桶。）
 
 ### 頁面清單
 
