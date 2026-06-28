@@ -44,6 +44,13 @@ pub async fn sync_agent_files(
             && matches!(i.status, ReviewStatus::Accepted | ReviewStatus::Synced))
         .cloned()
         .collect();
+    // Phase 3b-1：全域 scope 記憶為「跨專案全集」→ vault general/agent/memory；索引由全集重建
+    let all_global_memory: Vec<ReviewItem> = review_queue::list_items(&data_dir, None)
+        .into_iter()
+        .filter(|i| i.item_type == ReviewItemType::Memory
+            && i.sync_scope == SyncScope::Global
+            && matches!(i.status, ReviewStatus::Accepted | ReviewStatus::Synced))
+        .collect();
 
     // ── 衝突卡控：除非 force 放行，否則偵測到衝突就擋下（不寫任何檔）──
     if !force {
@@ -62,7 +69,9 @@ pub async fn sync_agent_files(
     // hard gate（Phase 3a/3c）：有專案記憶或技能但 vault 未設 → 拒絕，
     // 避免記憶/技能無落點卻仍被標 Synced（資料遺失）。
     let has_skills = accepted.iter().any(|i| i.item_type == ReviewItemType::Skill);
-    if (!all_project_memory.is_empty() || has_skills) && vault_root.is_none() {
+    // 全域記憶為跨專案全集 → gate 以全集判斷（不只本專案），與實際會寫入的範圍一致（Codex 3b-1 追審）
+    let has_global = all_global_memory.iter().any(|i| i.status == ReviewStatus::Accepted);
+    if (!all_project_memory.is_empty() || has_skills || has_global) && vault_root.is_none() {
         return Err(AppError::InvalidPath(
             "尚未設定 vault 路徑：記憶/技能需寫入 vault，請先到「設定」指定 vault 資料夾".into()));
     }
@@ -75,12 +84,23 @@ pub async fn sync_agent_files(
     )?;
     result.project_id = project_id.clone();
 
+    // Phase 3b-1：全域記憶 → vault general/agent/memory（跨專案全集；補 3a 缺口）
+    if let Some(vroot) = vault_root.as_deref().map(std::path::Path::new) {
+        let global_written = agent_exporter::sync_global_memory(vroot, &all_global_memory)?;
+        result.written_files.extend(global_written);
+    }
+
     // ── 同步完成後標記為 Synced ───────────────────────
-    // 全域 scope 記憶 3a 未處理（延 3b）→ 不標 Synced，留 Accepted 不遺失（Codex #2）
-    let synced_ids: Vec<String> = accepted.iter()
-        .filter(|i| !(i.item_type == ReviewItemType::Memory && i.sync_scope == SyncScope::Global))
-        .map(|i| i.id.clone())
-        .collect();
+    // 3b-1 後全域記憶已有 vault 落點 → 全部 accepted（含本專案全域記憶）皆標 Synced
+    let mut synced_ids: Vec<String> = accepted.iter().map(|i| i.id.clone()).collect();
+    // 跨專案寫入 vault 的 Accepted 全域記憶也一併標 Synced，否則別專案的會卡 Accepted、每次 sync 重寫（Codex 3b-1 #1）
+    if vault_root.is_some() {
+        for g in &all_global_memory {
+            if g.status == ReviewStatus::Accepted && !synced_ids.contains(&g.id) {
+                synced_ids.push(g.id.clone());
+            }
+        }
+    }
     review_queue::mark_synced(&data_dir, &synced_ids)?;
 
     // ── 歸檔已同步的 pending 技能檔 ──────────────────
@@ -120,22 +140,34 @@ pub async fn preview_sync_diff(
             && matches!(i.status, ReviewStatus::Accepted | ReviewStatus::Synced))
         .cloned()
         .collect();
+    let all_global_memory: Vec<ReviewItem> = review_queue::list_items(&data_dir, None)
+        .into_iter()
+        .filter(|i| i.item_type == ReviewItemType::Memory
+            && i.sync_scope == SyncScope::Global
+            && matches!(i.status, ReviewStatus::Accepted | ReviewStatus::Synced))
+        .collect();
     let vault_root = vault_manager::get_vault_config(&data_dir).vault_path;
-    // 與 sync 一致的 hard gate：vault 未設 + 有專案記憶或技能 → preview 也報錯，
-    // 不讓 preview 看似可執行、實際 sync 才失敗。
+    // 與 sync 一致的 hard gate：vault 未設 + 有專案記憶/技能/全域記憶 → preview 也報錯。
     let has_skills = accepted.iter().any(|i| i.item_type == ReviewItemType::Skill);
-    if (!all_project_memory.is_empty() || has_skills) && vault_root.is_none() {
+    let has_global = all_global_memory.iter().any(|i| i.status == ReviewStatus::Accepted);
+    if (!all_project_memory.is_empty() || has_skills || has_global) && vault_root.is_none() {
         return Err(AppError::InvalidPath(
             "尚未設定 vault 路徑：記憶/技能需寫入 vault，請先到「設定」指定 vault 資料夾".into()));
     }
 
-    Ok(agent_exporter::preview_sync_diff(
+    let vault_root_path = vault_root.as_deref().map(std::path::Path::new);
+    let mut previews = agent_exporter::preview_sync_diff(
         &project.path,
         project.vault_folder.as_deref(),
-        vault_root.as_deref().map(std::path::Path::new),
+        vault_root_path,
         &accepted,
         &all_project_memory,
-    ))
+    );
+    // Phase 3b-1：附上全域記憶（general/agent/memory）的 preview
+    if let Some(vroot) = vault_root_path {
+        previews.extend(agent_exporter::preview_global_memory(vroot, &all_global_memory));
+    }
+    Ok(previews)
 }
 
 #[cfg(test)]

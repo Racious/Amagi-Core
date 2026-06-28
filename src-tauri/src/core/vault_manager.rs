@@ -117,7 +117,7 @@ pub fn set_vault_path(path: &str, data_dir: &Path) -> Result<VaultSetResult, App
 
 fn build_pointer_block(vault_path: &str) -> String {
     format!(
-        "{BEGIN_MARKER}\n# Amagi-Vault 知識庫\n路徑：{vault_path}\n對話開始時讀取該路徑 index.md 與最近 3 份 daily/，規則依該路徑 CLAUDE.md。\n{END_MARKER}"
+        "{BEGIN_MARKER}\n# Amagi-Vault 知識庫\n路徑：{vault_path}\n對話開始時讀取該路徑 index.md 與最近 3 份 daily/，規則依該路徑 CLAUDE.md。\n全域記憶見 general/agent/memory/（先讀其 MEMORY.md 速查，需要時再讀個別記憶檔）。\n{END_MARKER}"
     )
 }
 

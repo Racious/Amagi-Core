@@ -226,6 +226,62 @@ pub fn preview_sync_diff(
     previews
 }
 
+/// 全域 scope 記憶 → vault `general/agent/memory/`（Phase 3b-1，補 3a 缺口）。
+/// 跨專案：`global_memory` 應為全專案的全集（Accepted+Synced 全域記憶），索引由此重建。
+/// 與專案記憶共用 helper（memory_filename / build_memory_file / build_memory_index）。
+pub fn sync_global_memory(vault_root: &Path, global_memory: &[ReviewItem]) -> Result<Vec<String>, AppError> {
+    let mems: Vec<&ReviewItem> = global_memory.iter()
+        .filter(|i| i.item_type == ReviewItemType::Memory && i.sync_scope == SyncScope::Global)
+        .collect();
+    if mems.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mem_dir = vault_root.join("general").join("agent").join("memory");
+    std::fs::create_dir_all(&mem_dir).map_err(|e| AppError::Io(e.to_string()))?;
+    let mut written = Vec::new();
+    let entries = memory_index_entries(&mems);
+    for (item, entry) in mems.iter().zip(&entries) {
+        let path = mem_dir.join(&entry.0);
+        markdown::write_with_backup(&path, &markdown::build_memory_file(item))?;
+        written.push(path.to_string_lossy().to_string());
+    }
+    let idx_path = mem_dir.join("MEMORY.md");
+    std::fs::write(&idx_path, markdown::build_memory_index(&entries))
+        .map_err(|e| AppError::Io(e.to_string()))?;
+    written.push(idx_path.to_string_lossy().to_string());
+    Ok(written)
+}
+
+/// 全域記憶的 preview（general/agent/memory 每筆 + MEMORY.md），供 preview 指令附加。
+pub fn preview_global_memory(vault_root: &Path, global_memory: &[ReviewItem]) -> Vec<FileDiffPreview> {
+    let mems: Vec<&ReviewItem> = global_memory.iter()
+        .filter(|i| i.item_type == ReviewItemType::Memory && i.sync_scope == SyncScope::Global)
+        .collect();
+    if mems.is_empty() {
+        return Vec::new();
+    }
+    let mem_dir = vault_root.join("general").join("agent").join("memory");
+    let entries = memory_index_entries(&mems);
+    let mut previews = Vec::new();
+    for (item, entry) in mems.iter().zip(&entries) {
+        let path = mem_dir.join(&entry.0);
+        previews.push(FileDiffPreview {
+            current_content: std::fs::read_to_string(&path).ok(),
+            new_content: markdown::build_memory_file(item),
+            is_new_file: !path.exists(),
+            file_path: path.to_string_lossy().to_string(),
+        });
+    }
+    let idx_path = mem_dir.join("MEMORY.md");
+    previews.push(FileDiffPreview {
+        current_content: std::fs::read_to_string(&idx_path).ok(),
+        new_content: markdown::build_memory_index(&entries),
+        is_new_file: !idx_path.exists(),
+        file_path: idx_path.to_string_lossy().to_string(),
+    });
+    previews
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -262,5 +318,43 @@ mod tests {
         let dests = skill_dest_paths(root, &[&s]);
         let p = dests[0].to_string_lossy().replace('\\', "/");
         assert!(p.contains("/_skills/skill-id123456/SKILL.md"), "空 slug 應 fallback skill-<id>，實得 {p}");
+    }
+
+    fn mem(id: &str, title: &str, scope: SyncScope) -> ReviewItem {
+        ReviewItem {
+            id: id.into(), project_id: "p".into(),
+            item_type: ReviewItemType::Memory, category: "feedback".into(),
+            title: title.into(), content: "內容一".into(),
+            risk: RiskLevel::Low, status: ReviewStatus::Accepted,
+            sync_targets: vec![], sync_scope: scope,
+            source_pending_file: None, created_at: Utc::now(), reviewed_at: None,
+        }
+    }
+
+    #[test]
+    fn test_sync_global_memory_writes_general_only() {
+        let root = std::env::temp_dir().join(format!("amagi-glob-{}", uuid::Uuid::new_v4()));
+        let vault = root.join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+
+        // 全域 scope → general/agent/memory + 索引
+        let g = mem("g1", "全域偏好", SyncScope::Global);
+        let written = sync_global_memory(&vault, std::slice::from_ref(&g)).unwrap();
+        assert!(written.iter().any(|f| {
+            let p = f.replace('\\', "/");
+            p.contains("/general/agent/memory/") && p.ends_with("MEMORY.md")
+        }), "應寫 general 記憶索引");
+        assert!(vault.join("general/agent/memory/MEMORY.md").is_file());
+        assert!(written.iter().any(|f| {
+            let p = f.replace('\\', "/");
+            p.contains("/general/agent/memory/") && p.ends_with(".md") && !p.ends_with("MEMORY.md")
+        }), "應寫個別全域記憶檔");
+
+        // Project scope 不被 sync_global_memory 處理
+        let p = mem("p1", "專案記憶", SyncScope::Project);
+        assert!(sync_global_memory(&vault, std::slice::from_ref(&p)).unwrap().is_empty(),
+            "Project scope 不該被 sync_global_memory 寫入");
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
