@@ -21,11 +21,6 @@ pub fn global_claude_skills_dir() -> Option<std::path::PathBuf> {
     dirs::home_dir().map(|h| h.join(".claude").join("skills"))
 }
 
-/// ~/.claude/commands/
-pub fn global_claude_commands_dir() -> Option<std::path::PathBuf> {
-    dirs::home_dir().map(|h| h.join(".claude").join("commands"))
-}
-
 /// ~/.claude/CLAUDE.md（全域記憶）
 pub fn global_claude_md_path() -> Option<std::path::PathBuf> {
     dirs::home_dir().map(|h| h.join(".claude").join("CLAUDE.md"))

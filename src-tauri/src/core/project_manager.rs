@@ -307,8 +307,10 @@ scope: project
 ```
 
 ## scope 說明
-- `project`：只在這個專案使用（預設）
-- `global`：所有專案通用，AMAGI 會寫入 ~/.codex/skills 和 ~/.claude/commands
+- 技能經審核後一律收進 vault `_skills/`（單一來源）；是否分發到 `.codex`/`.claude`、
+  及範圍（本專案或全域）由 Skills 頁選擇性分發決定。
+- `project`：傾向只在這個專案使用（預設）
+- `global`：傾向所有專案通用
 
 ## 什麼情況適合建立技能
 - 完成了一個之前沒有標準流程的任務

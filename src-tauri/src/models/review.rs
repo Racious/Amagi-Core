@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
 
-/// 同步範圍：專案層或全域（~/.codex / ~/.claude）
+/// 同步範圍：專案層或全域。sync 一律進 vault（Phase 3a/3c）；scope 影響 vault 落點層級
+/// 與日後分發預設，不再於 sync 當下直接寫 ~/.codex / ~/.claude。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum SyncScope {
@@ -54,7 +55,8 @@ pub struct ReviewItem {
     pub risk: RiskLevel,
     pub status: ReviewStatus,
     pub sync_targets: Vec<String>,
-    /// 預設 Project；切換為 Global 時寫入 ~/.codex/skills / ~/.claude/commands
+    /// 預設 Project；技能/記憶 sync 一律進 vault（`_skills` / `agent/memory`），
+    /// 實際分發到 .codex/.claude 由 Skills 頁選擇性處理（Phase 3a/3c 後）
     #[serde(default)]
     pub sync_scope: SyncScope,
     /// Agent 寫入 .amagi/pending/ 的來源檔路徑，同步後歸檔用

@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use crate::AppError;
 use crate::models::review::{ReviewItem, ReviewItemType, SyncScope};
 use crate::models::sync::{SyncResult, FileDiffPreview};
@@ -41,6 +41,43 @@ fn memory_index_entries(items: &[&ReviewItem]) -> Vec<(String, String, String)> 
             })
             .unwrap_or_default();
         (fname, item.title.clone(), hook)
+    }).collect()
+}
+
+/// 由技能清單算出各自 vault `_skills` 落點：slug 合法性守門（空/非法 → skill-<id>）、
+/// 同批同名去重、相容舊扁平 `<slug>.md`。sync 與 preview 共用，確保落點一致。
+fn skill_dest_paths(skills_root: &Path, skills: &[&ReviewItem]) -> Vec<PathBuf> {
+    let mut seen = std::collections::HashSet::new();
+    skills.iter().map(|skill| {
+        let short_id: String = skill.id.chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .take(8).collect();
+        let short_id = if short_id.is_empty() { "x".to_string() } else { short_id };
+        let base = fs_utils::slugify(&skill.title);
+        let base_slug = if crate::core::skill_library::is_valid_skill_slug(&base) {
+            base
+        } else {
+            format!("skill-{}", short_id)
+        };
+        // 迴圈式唯一化：base → base-id → base-id-2 …，直到 seen 無此 slug，
+        // 確保改名後仍唯一、不互相覆寫（Codex 3c 追審）。
+        let mut slug = base_slug.clone();
+        let mut n = 1;
+        while seen.contains(&slug) {
+            n += 1;
+            slug = if n == 2 {
+                format!("{}-{}", base_slug, short_id)
+            } else {
+                format!("{}-{}-{}", base_slug, short_id, n)
+            };
+        }
+        seen.insert(slug.clone());
+        let flat = skills_root.join(format!("{}.md", slug));
+        if flat.is_file() {
+            flat
+        } else {
+            skills_root.join(&slug).join("SKILL.md")
+        }
     }).collect()
 }
 
@@ -93,54 +130,17 @@ pub fn sync_agent_files(
     // 風險過高，故 3a 停掉此路徑。延到 3b 改寫 vault general/agent/memory + 全域錨點指標。
     // command 層不會把全域記憶項標 Synced（留 Accepted 待 3b），故此處略過不寫、不遺失。
 
+    // ── 技能 → vault `_skills/<slug>/SKILL.md`（單一來源；Phase 3c，老爺裁定 A：解耦）──
+    // sync 只「進庫」，不再自動撒到 .amagi/.codex/.claude；分發改由 Skills 頁選擇性分發。
     let skills: Vec<&ReviewItem> = accepted.iter()
         .filter(|i| i.item_type == ReviewItemType::Skill)
         .collect();
-
-    for skill in &skills {
-        let slug = fs_utils::slugify(&skill.title);
-
-        // codex_dir：Codex 原生技能；claude_skill_dir：Claude 原生技能（自動觸發）
-        let (codex_dir, claude_skill_dir) = match skill.sync_scope {
-            SyncScope::Global => {
-                // 全域：~/.codex/skills/<slug>  和  ~/.claude/skills/<slug>
-                let cd = fs_utils::global_codex_skills_dir()
-                    .map(|d| d.join(&slug));
-                let cs = fs_utils::global_claude_commands_dir()
-                    .and_then(|c| c.parent().map(|p| p.join("skills").join(&slug)));
-                (cd, cs)
-            }
-            SyncScope::Project => {
-                // 專案層：<project>/.codex/skills/<slug> 和 <project>/.claude/skills/<slug>
-                let cd = Some(Path::new(project_path).join(".codex").join("skills").join(&slug));
-                let cs = Some(Path::new(project_path).join(".claude").join("skills").join(&slug));
-                (cd, cs)
-            }
-        };
-
-        let native = markdown::build_native_skill_md(skill);
-
-        // ── .amagi/skills/ 主副本（永遠寫入，不論 scope）────
-        let amagi_skills_dir = Path::new(project_path).join(".amagi").join("skills");
-        std::fs::create_dir_all(&amagi_skills_dir).map_err(|e| AppError::Io(e.to_string()))?;
-        let amagi_path = amagi_skills_dir.join(format!("{}.md", slug));
-        markdown::write_with_backup(&amagi_path, &native)?;
-        written.push(amagi_path.to_string_lossy().to_string());
-
-        // ── Codex 原生技能：.codex/skills/<slug>/SKILL.md ──
-        if let Some(dir) = codex_dir {
-            std::fs::create_dir_all(&dir).map_err(|e| AppError::Io(e.to_string()))?;
-            let path = dir.join("SKILL.md");
-            markdown::write_with_backup(&path, &native)?;
-            written.push(path.to_string_lossy().to_string());
-        }
-
-        // ── Claude 原生技能：.claude/skills/<slug>/SKILL.md（描述自動觸發）──
-        if let Some(dir) = claude_skill_dir {
-            std::fs::create_dir_all(&dir).map_err(|e| AppError::Io(e.to_string()))?;
-            let path = dir.join("SKILL.md");
-            markdown::write_with_backup(&path, &native)?;
-            written.push(path.to_string_lossy().to_string());
+    if let (Some(vroot), false) = (vault_root, skills.is_empty()) {
+        let skills_root = vroot.join("_skills");
+        let dests = skill_dest_paths(&skills_root, &skills);
+        for (skill, dest) in skills.iter().zip(&dests) {
+            markdown::write_with_backup(dest, &markdown::build_native_skill_md(skill))?;
+            written.push(dest.to_string_lossy().to_string());
         }
     }
 
@@ -204,19 +204,63 @@ pub fn preview_sync_diff(
         });
     }
 
-    for skill in accepted.iter().filter(|i| i.item_type == ReviewItemType::Skill) {
-        let slug = fs_utils::slugify(&skill.title);
-        let claude_path = Path::new(project_path)
-            .join(".claude").join("skills").join(&slug).join("SKILL.md");
-        let new_content = markdown::build_native_skill_md(skill);
-        let current = std::fs::read_to_string(&claude_path).ok();
-        previews.push(FileDiffPreview {
-            file_path: claude_path.to_string_lossy().to_string(),
-            current_content: current,
-            new_content,
-            is_new_file: !claude_path.exists(),
-        });
+    // 技能 → vault `_skills`（Phase 3c·A）：preview 與 sync 共用 skill_dest_paths 算落點，確保一致。
+    if let Some(vroot) = vault_root {
+        let skills: Vec<&ReviewItem> = accepted.iter()
+            .filter(|i| i.item_type == ReviewItemType::Skill)
+            .collect();
+        if !skills.is_empty() {
+            let skills_root = vroot.join("_skills");
+            let dests = skill_dest_paths(&skills_root, &skills);
+            for (skill, dest) in skills.iter().zip(&dests) {
+                previews.push(FileDiffPreview {
+                    current_content: std::fs::read_to_string(dest).ok(),
+                    new_content: markdown::build_native_skill_md(skill),
+                    is_new_file: !dest.exists(),
+                    file_path: dest.to_string_lossy().to_string(),
+                });
+            }
+        }
     }
 
     previews
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::review::{RiskLevel, ReviewStatus, SyncScope};
+    use chrono::Utc;
+
+    fn sk(id: &str, title: &str) -> ReviewItem {
+        ReviewItem {
+            id: id.into(), project_id: "p".into(),
+            item_type: ReviewItemType::Skill, category: "skill".into(),
+            title: title.into(), content: "x".into(),
+            risk: RiskLevel::Low, status: ReviewStatus::Accepted,
+            sync_targets: vec![], sync_scope: SyncScope::Project,
+            source_pending_file: None, created_at: Utc::now(), reviewed_at: None,
+        }
+    }
+
+    #[test]
+    fn test_skill_dest_paths_dedups_after_rename() {
+        // a="foo"、b="foo-bar"、c="foo"(id=bar)：c 撞 foo→改 foo-bar 又撞 b → 須再唯一化
+        let root = std::path::Path::new("/no-such-vault/_skills");
+        let (a, b, c) = (sk("aaa", "foo"), sk("xxx", "foo-bar"), sk("bar", "foo"));
+        let items = vec![&a, &b, &c];
+        let dests = skill_dest_paths(root, &items);
+        let uniq: std::collections::HashSet<_> = dests.iter().collect();
+        assert_eq!(uniq.len(), 3, "三筆落點須全唯一，不互相覆寫");
+    }
+
+    #[test]
+    fn test_skill_dest_paths_empty_slug_fallback() {
+        // 全符號標題 → slug 空 → fallback skill-<id>，落點仍為合法目錄式
+        let root = std::path::Path::new("/no-such-vault/_skills");
+        let s = sk("id123456", "###");
+        let dests = skill_dest_paths(root, &[&s]);
+        let p = dests[0].to_string_lossy().replace('\\', "/");
+        assert!(p.contains("/_skills/skill-id123456/SKILL.md"), "空 slug 應 fallback skill-<id>，實得 {p}");
+    }
 }

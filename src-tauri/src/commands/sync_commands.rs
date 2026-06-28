@@ -59,11 +59,12 @@ pub async fn sync_agent_files(
     }
 
     let vault_root = vault_manager::get_vault_config(&data_dir).vault_path;
-    // Phase 3a hard gate（Codex #1）：有專案記憶但 vault 未設 → 拒絕，
-    // 避免專案記憶無落點卻仍被標 Synced（資料遺失）。
-    if !all_project_memory.is_empty() && vault_root.is_none() {
+    // hard gate（Phase 3a/3c）：有專案記憶或技能但 vault 未設 → 拒絕，
+    // 避免記憶/技能無落點卻仍被標 Synced（資料遺失）。
+    let has_skills = accepted.iter().any(|i| i.item_type == ReviewItemType::Skill);
+    if (!all_project_memory.is_empty() || has_skills) && vault_root.is_none() {
         return Err(AppError::InvalidPath(
-            "尚未設定 vault 路徑：專案記憶需寫入 vault，請先到「設定」指定 vault 資料夾".into()));
+            "尚未設定 vault 路徑：記憶/技能需寫入 vault，請先到「設定」指定 vault 資料夾".into()));
     }
     let mut result = agent_exporter::sync_agent_files(
         &project.path,
@@ -120,11 +121,12 @@ pub async fn preview_sync_diff(
         .cloned()
         .collect();
     let vault_root = vault_manager::get_vault_config(&data_dir).vault_path;
-    // 與 sync 一致的 hard gate（Codex 追審 #B）：vault 未設 + 有專案記憶 → preview 也報錯，
+    // 與 sync 一致的 hard gate：vault 未設 + 有專案記憶或技能 → preview 也報錯，
     // 不讓 preview 看似可執行、實際 sync 才失敗。
-    if !all_project_memory.is_empty() && vault_root.is_none() {
+    let has_skills = accepted.iter().any(|i| i.item_type == ReviewItemType::Skill);
+    if (!all_project_memory.is_empty() || has_skills) && vault_root.is_none() {
         return Err(AppError::InvalidPath(
-            "尚未設定 vault 路徑：專案記憶需寫入 vault，請先到「設定」指定 vault 資料夾".into()));
+            "尚未設定 vault 路徑：記憶/技能需寫入 vault，請先到「設定」指定 vault 資料夾".into()));
     }
 
     Ok(agent_exporter::preview_sync_diff(

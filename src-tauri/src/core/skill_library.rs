@@ -42,7 +42,7 @@ pub struct DistributeResult {
 /// 為相容舊資料，亦接受扁平式 `_skills/<slug>.md`。
 /// 合法技能 slug：非空、非 dot-prefixed（排除 `.system` 等保留/隱藏命名空間）、不含路徑分隔。
 /// 防止分發誤寫 `~/.codex/skills/.system` 等保留目錄。
-fn is_valid_skill_slug(slug: &str) -> bool {
+pub(crate) fn is_valid_skill_slug(slug: &str) -> bool {
     !slug.is_empty()
         && !slug.starts_with('.')
         && !slug.contains('/')

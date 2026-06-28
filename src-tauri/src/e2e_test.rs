@@ -334,7 +334,7 @@ fn e2e_gitignore_partial_and_no_false_ignores() {
 }
 
 // ───────────────────────────────────────────────────────────
-// 3. 技能同步 → .claude/skills、.codex/skills、.amagi/skills 原生格式
+// 3. 技能同步 → vault _skills/<slug>/SKILL.md（Phase 3c·A：單一來源，不自動分發）
 // ───────────────────────────────────────────────────────────
 #[test]
 fn e2e_skill_sync_native_format() {
@@ -345,30 +345,36 @@ fn e2e_skill_sync_native_format() {
     let content = "## 描述\n替遊戲狀態加入悔棋功能\n\n## 何時使用\n- 需要撤回上一步\n- 觸發關鍵字：undo、悔棋\n\n## 步驟\n1. 在 store 新增 history 陣列\n2. 實作 undo()";
     let skill = skill_item(&project.id, "新增悔棋功能", content);
 
-    let sync = agent_exporter::sync_agent_files(&sb.repo_str(), project.vault_folder.as_deref(), None, std::slice::from_ref(&skill), &[]).unwrap();
+    let sync = agent_exporter::sync_agent_files(
+        &sb.repo_str(),
+        project.vault_folder.as_deref(),
+        Some(&sb.vault_dir()),
+        std::slice::from_ref(&skill),
+        &[],
+    ).unwrap();
     assert!(sync.blocked_conflicts.is_empty());
 
     let slug = fs_utils::slugify(&skill.title);
-    let claude_skill = format!(".claude/skills/{}/SKILL.md", slug);
-    let codex_skill = format!(".codex/skills/{}/SKILL.md", slug);
-    let amagi_skill = format!(".amagi/skills/{}.md", slug);
-
-    assert!(sb.exists(&claude_skill), "缺少 {}", claude_skill);
-    assert!(sb.exists(&codex_skill), "缺少 {}", codex_skill);
-    assert!(sb.exists(&amagi_skill), "缺少 {}", amagi_skill);
+    // 技能正本落 vault _skills（Phase 3c·A）
+    let skill_path = sb.vault_dir().join("_skills").join(&slug).join("SKILL.md");
+    assert!(skill_path.is_file(), "缺少 vault _skills/{}/SKILL.md", slug);
+    assert!(sync.written_files.iter().any(|f| {
+        let p = f.replace('\\', "/");
+        p.contains("/_skills/") && p.ends_with("SKILL.md")
+    }), "written_files 應含 vault _skills 正本");
+    // sync 不再寫 .amagi/.codex/.claude（分發改由 Skills 頁）
+    assert!(!sb.exists(&format!(".amagi/skills/{}.md", slug)), "3c 後不寫 .amagi/skills");
+    assert!(!sb.exists(&format!(".codex/skills/{}/SKILL.md", slug)), "sync 不自動分發 .codex");
+    assert!(!sb.exists(&format!(".claude/skills/{}/SKILL.md", slug)), "sync 不自動分發 .claude");
 
     // 原生 frontmatter：name / description / when_to_use 自動觸發欄位
-    let md = sb.read(&claude_skill);
+    let md = std::fs::read_to_string(&skill_path).unwrap();
     assert!(md.starts_with("---\n"));
     assert!(md.contains("name: \"新增悔棋功能\""));
     assert!(md.contains("description:"));
     assert!(md.contains("when_to_use:"));
     assert!(md.contains("undo")); // when_to_use 應帶觸發關鍵字
     assert!(md.contains("## 步驟")); // 內文保留
-
-    // 三份內容一致
-    assert_eq!(sb.read(&codex_skill), md);
-    assert_eq!(sb.read(&amagi_skill), md);
 }
 
 // ───────────────────────────────────────────────────────────
