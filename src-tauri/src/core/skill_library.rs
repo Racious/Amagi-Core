@@ -49,6 +49,20 @@ fn is_valid_skill_slug(slug: &str) -> bool {
         && !slug.contains('\\')
 }
 
+/// 已知官方/內建技能 slug（Codex/Claude 隨附）。收編它們會造成「過時副本＋雙重來源」，
+/// 故掃描候選時排除（adr-004 收編準則）。採黑名單：現實中唯一誤報源就是這些內建技能
+/// （Claude 官方技能走 plugin、不落 skills/ 目錄，掃不到）；新官方技能出現時補此清單。
+/// 註：`.system/imagegen` 等 dot-prefixed 已由 `is_valid_skill_slug` 擋掉，此處保險再列非 dot 形式。
+const KNOWN_OFFICIAL_SKILLS: &[&str] = &["hatch-pet", "imagegen"];
+
+/// slug 是否為已知官方/內建技能（不應收編進 vault）。
+/// 大小寫不敏感比對：Windows 檔名大小寫不敏感，防 `Hatch-Pet` 之類別名繞過（Codex F3-低）。
+fn is_known_official(slug: &str) -> bool {
+    KNOWN_OFFICIAL_SKILLS
+        .iter()
+        .any(|s| s.eq_ignore_ascii_case(slug))
+}
+
 fn collect_skills(dir: &Path) -> Vec<(String, String)> {
     let mut out = Vec::new();
     let entries = match std::fs::read_dir(dir) {
@@ -180,7 +194,11 @@ pub fn scan_adoptable(sources: &[PathBuf], vault_root: &Path) -> Vec<AdoptableSk
                 Some(s) => s.to_string(),
                 None => continue,
             };
-            if !is_valid_skill_slug(&slug) || existing.contains(&slug) || seen.contains(&slug) {
+            if !is_valid_skill_slug(&slug)
+                || is_known_official(&slug)
+                || existing.contains(&slug)
+                || seen.contains(&slug)
+            {
                 continue;
             }
             // 來源須安全：本身非 symlink/junction 且 canonical 仍在來源根下，
@@ -218,11 +236,17 @@ pub fn adopt_skills(vault_root: &Path, items: &[(String, PathBuf)]) -> Result<Ad
         .collect();
     let mut res = AdoptResult::default();
     for (slug, source) in items {
-        // 非法 slug / 缺 SKILL.md / 來源本身為 symlink → 無法收編（縱深，指令層通常已過濾）
+        // 非法 slug / 官方黑名單 / 缺 SKILL.md / 來源本身為 symlink → 無法收編。
+        // 官方黑名單同步擋在核心（縱深）：scan 已過濾候選，但 adopt_skills 是公開後端表面，
+        // 直接以官方 slug 呼叫（Tauri command / 批次）不應繞過收編準則（Codex F2-中）。
         let src_is_symlink = std::fs::symlink_metadata(source)
             .map(|m| m.file_type().is_symlink())
             .unwrap_or(true);
-        if !is_valid_skill_slug(slug) || !source.join("SKILL.md").is_file() || src_is_symlink {
+        if !is_valid_skill_slug(slug)
+            || is_known_official(slug)
+            || !source.join("SKILL.md").is_file()
+            || src_is_symlink
+        {
             res.missing.push(slug.clone());
             continue;
         }
@@ -371,14 +395,17 @@ mod tests {
     }
 
     #[test]
-    fn test_scan_adoptable_filters_existing_invalid_and_dedups() {
+    fn test_scan_adoptable_filters_existing_invalid_official_and_dedups() {
         let root = std::env::temp_dir().join(format!("amagi-adopt-{}", uuid::Uuid::new_v4()));
         // vault 已有 codex-review
         let lib = root.join("_skills");
         std::fs::create_dir_all(lib.join("codex-review")).unwrap();
         std::fs::write(lib.join("codex-review").join("SKILL.md"), "---\nname: cr\n---\n").unwrap();
-        // 來源 A（codex 全域）：hatch-pet（新）、codex-review（vault 已有）、.system（保留）、no-md（無 SKILL.md）
+        // 來源 A（codex 全域）：deploy-helper（自製新）、hatch-pet（官方→黑名單擋）、
+        //   codex-review（vault 已有）、.system（保留）、no-md（無 SKILL.md）
         let src_a = root.join("codex_skills");
+        std::fs::create_dir_all(src_a.join("deploy-helper")).unwrap();
+        std::fs::write(src_a.join("deploy-helper").join("SKILL.md"), "---\nname: \"部署助手\"\n---\n").unwrap();
         std::fs::create_dir_all(src_a.join("hatch-pet")).unwrap();
         std::fs::write(src_a.join("hatch-pet").join("SKILL.md"), "---\nname: \"養寵物\"\n---\n").unwrap();
         std::fs::create_dir_all(src_a.join("codex-review")).unwrap();
@@ -386,16 +413,19 @@ mod tests {
         std::fs::create_dir_all(src_a.join(".system")).unwrap();
         std::fs::write(src_a.join(".system").join("SKILL.md"), "---\nname: s\n---\n").unwrap();
         std::fs::create_dir_all(src_a.join("no-md")).unwrap();
-        // 來源 B（claude 全域）：hatch-pet（與 A 重複，應去重）
+        // 來源 B（claude 全域）：deploy-helper（與 A 重複，應去重）
         let src_b = root.join("claude_skills");
-        std::fs::create_dir_all(src_b.join("hatch-pet")).unwrap();
-        std::fs::write(src_b.join("hatch-pet").join("SKILL.md"), "---\nname: \"養寵物\"\n---\n").unwrap();
+        std::fs::create_dir_all(src_b.join("deploy-helper")).unwrap();
+        std::fs::write(src_b.join("deploy-helper").join("SKILL.md"), "---\nname: \"部署助手\"\n---\n").unwrap();
 
         let cands = scan_adoptable(&[src_a.clone(), src_b.clone()], &root);
-        // 只有 hatch-pet 一筆：codex-review 已在 vault、.system 保留、no-md 無 SKILL.md、跨來源去重
+        // 只有 deploy-helper 一筆：codex-review 已在 vault、hatch-pet 官方黑名單、
+        // .system 保留、no-md 無 SKILL.md、跨來源去重
         assert_eq!(cands.len(), 1);
-        assert_eq!(cands[0].slug, "hatch-pet");
-        assert_eq!(cands[0].name, "養寵物");
+        assert_eq!(cands[0].slug, "deploy-helper");
+        assert_eq!(cands[0].name, "部署助手");
+        // hatch-pet 不得被列為候選（官方黑名單，避免過時副本＋雙重來源）
+        assert!(!cands.iter().any(|c| c.slug == "hatch-pet"));
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -403,8 +433,9 @@ mod tests {
     #[test]
     fn test_adopt_copies_tree_and_is_non_destructive() {
         let root = std::env::temp_dir().join(format!("amagi-adopt2-{}", uuid::Uuid::new_v4()));
-        // 來源技能含附屬檔（scripts/run.sh）
-        let src = root.join("src").join("hatch-pet");
+        // 來源技能含附屬檔（scripts/run.sh）。slug 用自製名（非官方黑名單），
+        // 才驗得到正常收編路徑；官方 slug 的擋除由 test_adopt_rejects_official_blocklisted_slug 覆蓋。
+        let src = root.join("src").join("deploy-helper");
         std::fs::create_dir_all(src.join("scripts")).unwrap();
         std::fs::write(src.join("SKILL.md"), "---\nname: pet\n---\n步驟").unwrap();
         std::fs::write(src.join("scripts").join("run.sh"), "echo hi").unwrap();
@@ -412,20 +443,20 @@ mod tests {
         let vault = root.join("vault");
         std::fs::create_dir_all(&vault).unwrap();
 
-        let items = vec![("hatch-pet".to_string(), src.clone())];
+        let items = vec![("deploy-helper".to_string(), src.clone())];
         let res = adopt_skills(&vault, &items).unwrap();
-        assert_eq!(res.adopted, vec!["hatch-pet".to_string()]);
+        assert_eq!(res.adopted, vec!["deploy-helper".to_string()]);
         assert!(res.skipped.is_empty());
         // 整個目錄樹（含附屬檔）都被複製
-        assert!(vault.join("_skills/hatch-pet/SKILL.md").is_file());
-        assert!(vault.join("_skills/hatch-pet/scripts/run.sh").is_file());
+        assert!(vault.join("_skills/deploy-helper/SKILL.md").is_file());
+        assert!(vault.join("_skills/deploy-helper/scripts/run.sh").is_file());
 
         // 再收編一次 → 非破壞略過、不覆寫
-        std::fs::write(vault.join("_skills/hatch-pet/SKILL.md"), "已被改動").unwrap();
+        std::fs::write(vault.join("_skills/deploy-helper/SKILL.md"), "已被改動").unwrap();
         let res2 = adopt_skills(&vault, &items).unwrap();
-        assert_eq!(res2.skipped, vec!["hatch-pet".to_string()]);
+        assert_eq!(res2.skipped, vec!["deploy-helper".to_string()]);
         assert!(res2.adopted.is_empty());
-        let kept = std::fs::read_to_string(vault.join("_skills/hatch-pet/SKILL.md")).unwrap();
+        let kept = std::fs::read_to_string(vault.join("_skills/deploy-helper/SKILL.md")).unwrap();
         assert_eq!(kept, "已被改動", "vault 既有正本不被覆寫");
 
         let _ = std::fs::remove_dir_all(&root);
@@ -450,6 +481,39 @@ mod tests {
         assert!(res.missing.contains(&"nomd".to_string()));
         assert!(!vault.join("_skills/.system").exists());
         assert!(!vault.join("_skills/nomd").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_adopt_rejects_official_blocklisted_slug() {
+        // 縱深：即使來源含合法 SKILL.md，官方黑名單 slug 也不得被 adopt_skills 收編。
+        // scan 已擋候選，但 adopt_skills 是公開後端表面，直接呼叫不應繞過收編準則（Codex 低）。
+        let root = std::env::temp_dir().join(format!("amagi-adopt5-{}", uuid::Uuid::new_v4()));
+        let vault = root.join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        // 各官方來源都備合法 SKILL.md，確保「被擋」是因黑名單、而非缺檔
+        let mk = |dir: &str| {
+            let s = root.join("src").join(dir);
+            std::fs::create_dir_all(&s).unwrap();
+            std::fs::write(s.join("SKILL.md"), "---\nname: x\n---\n步驟").unwrap();
+            s
+        };
+        let items = vec![
+            ("hatch-pet".to_string(), mk("hatch-pet")),    // 清單第一項
+            ("Hatch-Pet".to_string(), mk("hatch-pet-alias")), // 大小寫別名（Windows 不敏感）
+            ("imagegen".to_string(), mk("imagegen")),      // 清單第二項
+        ];
+        let res = adopt_skills(&vault, &items).unwrap();
+        // 全被官方黑名單擋：記入 missing（可判讀），不收編、不略過
+        assert!(res.adopted.is_empty(), "官方 slug 不得被收編");
+        assert!(res.skipped.is_empty());
+        for slug in ["hatch-pet", "Hatch-Pet", "imagegen"] {
+            assert!(res.missing.contains(&slug.to_string()), "{slug} 應記入 missing");
+        }
+        // vault 不得建立任何官方技能目錄
+        assert!(!vault.join("_skills/hatch-pet").exists());
+        assert!(!vault.join("_skills/Hatch-Pet").exists());
+        assert!(!vault.join("_skills/imagegen").exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 
