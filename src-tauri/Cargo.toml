@@ -1,6 +1,6 @@
 [package]
 name = "amagi-core"
-version = "0.1.7"
+version = "0.2.0"
 description = "AMAGI Core Desktop — Agent Memory & Skill Forge"
 authors = ["Racious"]
 edition = "2021"

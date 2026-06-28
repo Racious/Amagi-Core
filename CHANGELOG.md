@@ -2,6 +2,22 @@
 
 AMAGI Core 的所有重要變更記錄於此。版本遵循語意化版號（major.minor.patch）。
 
+## v0.2.0
+
+vault 知識庫整合：記憶與技能中樞、跨機鑰匙鏈、技能分發與收編。
+
+### 功能
+- **vault 知識庫整合**：指定 vault 資料夾為耐久資產單一來源；首次啟動引導（偵測未設→引導設定，建議掛 git）；vault git 同步（pull / commit-push）。
+- **跨機鑰匙鏈**：設定 vault 時於本機 `~/.claude/CLAUDE.md` 與 `~/.codex/AGENTS.md` 寫入受管區塊（僅替換標記區、先備份 .bak），讓 AI 對話自動指向本機 vault；專案產生路徑無關的薄指針，換機不錯位。
+- **技能單一來源 + 分發**：vault `_skills/` 為技能正本；選擇性分發 UI（技能 × 目標矩陣）分發到全域或指定專案；引導一次性全域分發（新機一鍵就緒）。
+- **技能收編**：掃描散落於全域/專案的技能、收編進 vault 單一來源（自動排除官方內建技能，避免過時副本）。
+- **文件路由器**：AI 產出的耐久文件依 frontmatter `type` 自動歸入 vault 對應桶（knowledge / reports / 頂層 daily）。
+- **知識匯入**：把討論結論、筆記或檔案匯入 vault，經審核後寫入；可掃描 sources/clips 產生候選。
+- **Codex 審查工作流**：支援 Step 4.5 外部交叉審查（技能化交辦單 + 報告回寫 vault）。
+
+### 修正
+- 設定 vault 成功訊息補上 `~/.codex/AGENTS.md`（原僅報 claude，實際雙寫）。
+
 ## v0.1.7
 
 更新殘留自動清理與檔案定位修復。
