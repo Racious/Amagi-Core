@@ -18,6 +18,8 @@ pub struct DistributeResultDto {
     pub skill_count: usize,
     pub repo_count: usize,
     pub written_count: usize,
+    /// 磁碟目錄已不存在、被略過分發的目標路徑（如幽靈專案），供前端提示使用者。
+    pub invalid_targets: Vec<String>,
 }
 
 #[tauri::command]
@@ -168,5 +170,6 @@ pub async fn distribute_skills_selective(
         skill_count: res.skill_count,
         repo_count: res.repo_count,
         written_count: res.written.len(),
+        invalid_targets: res.invalid_targets,
     })
 }

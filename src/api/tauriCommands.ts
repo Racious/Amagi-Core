@@ -9,6 +9,8 @@ export interface ProjectInfo {
   initialized: boolean
   pendingReviewCount: number
   vaultFolder: string | null
+  /** 專案目錄是否仍可作為分發目標（後端 is_dir）。false → 不存在或非目錄（幽靈專案）。 */
+  pathExists: boolean
 }
 
 export interface InitResult {
@@ -206,6 +208,8 @@ export interface DistributeResult {
   skillCount: number
   repoCount: number
   writtenCount: number
+  /** 磁碟目錄已不存在、被略過分發的目標路徑（如幽靈專案）。 */
+  invalidTargets: string[]
 }
 
 export const api = {

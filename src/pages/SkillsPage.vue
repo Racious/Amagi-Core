@@ -110,12 +110,13 @@
                 <button v-for="p in visibleProjects(s.slug)" :key="p.path"
                         type="button"
                         class="pill chip-toggle"
-                        :class="checked[s.slug][p.path] ? 'tone-accent' : 'tone-muted'"
-                        :title="p.path"
+                        :class="!p.pathExists ? 'tone-muted' : (checked[s.slug][p.path] ? 'tone-accent' : 'tone-muted')"
+                        :disabled="!p.pathExists"
+                        :title="p.pathExists ? p.path : p.path + '（目錄不存在，無法分發）'"
                         :aria-pressed="checked[s.slug][p.path] ? 'true' : 'false'"
                         :aria-label="(checked[s.slug][p.path] ? '取消分發到 ' : '分發到 ') + p.name"
                         @click="toggle(s.slug, p.path)">
-                  <span v-if="checked[s.slug][p.path]">✓</span>{{ p.name }}
+                  <span v-if="checked[s.slug][p.path] && p.pathExists">✓</span>{{ p.name }}<span v-if="!p.pathExists"> ⚠</span>
                 </button>
               </div>
             </div>
@@ -130,6 +131,26 @@
           {{ busy ? '分發中…' : '套用分發' }}
         </button>
         <span v-if="distMsg" class="text-xs" style="color: var(--c-accent);">{{ distMsg }}</span>
+      </div>
+
+      <!-- 幽靈專案清理：projects.json 有記錄但磁碟目錄已不存在 -->
+      <div v-if="ghostProjects.length"
+           class="mt-4 pt-3 border-t border-[var(--c-border)]">
+        <div class="text-xs font-semibold mb-1" style="color: var(--c-danger, #c0392b);">
+          偵測到 {{ ghostProjects.length }} 個幽靈專案（記錄存在，但磁碟目錄已不存在）
+        </div>
+        <p class="text-xs text-muted mb-2">
+          這些目標已無法分發（上方已停用 ⚠）。可移除其記錄以清理清單。
+        </p>
+        <div v-for="g in ghostProjects" :key="g.id"
+             class="flex items-center justify-between gap-3 py-1">
+          <span class="text-xs text-fg min-w-0">
+            {{ g.name }} <code class="text-muted break-all">{{ g.path }}</code>
+          </span>
+          <button class="btn btn-ghost btn-sm shrink-0"
+                  :disabled="busy"
+                  @click="removeGhost(g)">移除記錄</button>
+        </div>
       </div>
     </div>
   </div>
@@ -157,6 +178,9 @@ const checked = reactive<Record<string, Record<string, boolean>>>({})
 
 // 專案多時才顯示搜尋框，少量專案搜尋反而是噪音
 const showProjectSearch = computed(() => projects.value.length > 5)
+
+// 幽靈專案：projects.json 有記錄但磁碟目錄已不存在（pathExists=false）
+const ghostProjects = computed(() => projects.value.filter(p => !p.pathExists))
 
 // 搜尋過濾後仍要保留「該技能已選的專案」，避免選好的目標被搜尋藏起來
 function visibleProjects(slug: string): ProjectInfo[] {
@@ -208,21 +232,42 @@ function clearAll() {
   }
 }
 
+// 載入技能庫與專案、重建勾選矩陣。重載時保留既有勾選（移除幽靈專案後不清掉使用者選擇）。
+async function loadMatrix() {
+  const [libs, projs] = await Promise.all([api.listLibrarySkills(), api.listProjects()])
+  const targetKeys = ['global', ...projs.map(p => p.path)]
+  for (const s of libs) {
+    const prev = checked[s.slug] || {}
+    const row: Record<string, boolean> = {}
+    for (const k of targetKeys) row[k] = prev[k] ?? false
+    checked[s.slug] = row
+  }
+  library.value = libs
+  projects.value = projs
+}
+
 onMounted(async () => {
   try {
-    const [libs, projs] = await Promise.all([api.listLibrarySkills(), api.listProjects()])
-    // 先建好勾選矩陣，再賦值給 reactive，避免渲染時 checked 尚未就緒
-    const targetKeys = ['global', ...projs.map(p => p.path)]
-    for (const s of libs) {
-      checked[s.slug] = {}
-      for (const k of targetKeys) checked[s.slug][k] = false
-    }
-    library.value = libs
-    projects.value = projs
+    await loadMatrix()
   } catch (e: any) {
     distMsg.value = `載入失敗：${e?.message ?? e}`
   }
 })
+
+// 移除幽靈專案記錄（projects.json）後重載清單
+async function removeGhost(g: ProjectInfo) {
+  busy.value = true
+  distMsg.value = ''
+  try {
+    await api.removeProject(g.id)
+    await loadMatrix()
+    distMsg.value = `已移除幽靈專案記錄：${g.name}`
+  } catch (e: any) {
+    distMsg.value = `移除失敗：${e?.message ?? e}`
+  } finally {
+    busy.value = false
+  }
+}
 
 async function applyDistribution() {
   const selections: { skillSlug: string; target: string }[] = []
@@ -241,7 +286,11 @@ async function applyDistribution() {
   distMsg.value = ''
   try {
     const r = await api.distributeSkillsSelective(selections)
-    distMsg.value = `已分發 ${r.skillCount} 個技能到 ${r.repoCount} 個目標（寫入 ${r.writtenCount} 檔）。`
+    let msg = `已分發 ${r.skillCount} 個技能到 ${r.repoCount} 個目標（寫入 ${r.writtenCount} 檔）。`
+    if (r.invalidTargets?.length) {
+      msg += ` ${r.invalidTargets.length} 個目標不存在已跳過：${r.invalidTargets.join('、')}`
+    }
+    distMsg.value = msg
   } catch (e: any) {
     distMsg.value = `分發失敗：${e?.message ?? e}`
   } finally {
