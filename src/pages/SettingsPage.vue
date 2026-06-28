@@ -177,7 +177,7 @@ async function chooseVault() {
     const r = await api.setVaultPath(picked)
     vaultPath.value = r.vaultPath
     const verb = r.pointerAction === 'replaced' ? '更新' : '寫入'
-    vaultMsg.value = `已${verb} ~/.claude/CLAUDE.md 受管區塊${r.backupMade ? '（已備份 .bak）' : ''}`
+    vaultMsg.value = `已${verb} ~/.claude/CLAUDE.md 與 ~/.codex/AGENTS.md 受管區塊${r.backupMade ? '（已備份 .bak）' : ''}`
     if (!r.looksLikeVault) {
       vaultWarn.value = '提醒：該資料夾未偵測到 CLAUDE.md / index.md，可能尚未初始化為 vault。'
     }
