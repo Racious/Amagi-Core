@@ -39,7 +39,34 @@
         <div v-else class="text-sm mb-3" style="color: var(--c-accent);">
           ✓ 已偵測到 git，跨機同步就緒。
         </div>
-        <button class="btn btn-primary btn-sm" @click="$emit('done')">開始使用</button>
+
+        <!-- 步驟三：技能分發到本機全域（每機各做一次，新環境一鍵就緒）-->
+        <div class="skill-distribute mb-4">
+          <template v-if="librarySkills.length > 0">
+            <div class="text-sm font-semibold mb-1">🧩 技能分發到本機全域</div>
+            <p class="text-xs text-muted mb-2">
+              知識庫有 {{ librarySkills.length }} 個技能。分發到本機全域
+              <code>~/.codex/skills</code>、<code>~/.claude/skills</code> 後，所有專案的 AI 對話即可使用。
+              技能正本恆在 vault，分發每台機器各做一次；日後可到「技能」頁調整。
+            </p>
+            <div v-if="!distributeDone" class="flex items-center gap-3 flex-wrap">
+              <button class="btn btn-primary btn-sm" :disabled="distributing" @click="distributeAll">
+                {{ distributing ? '分發中…' : `分發 ${librarySkills.length} 個技能到全域` }}
+              </button>
+              <span class="text-xs text-muted">可略過，日後在「技能」頁再分發。</span>
+            </div>
+            <p v-else class="text-xs" style="color: var(--c-accent);">{{ distributeMsg }}</p>
+            <p v-if="distributeErr" class="text-xs mt-1" style="color: var(--c-danger, #c0392b);">{{ distributeErr }}</p>
+          </template>
+          <p v-else-if="skillLoadWarn" class="text-xs" style="color: var(--c-danger, #c0392b);">{{ skillLoadWarn }}</p>
+          <p v-else class="text-xs text-muted">
+            知識庫目前沒有技能。日後可到「技能」頁收編技能後再分發到本機全域。
+          </p>
+        </div>
+
+        <button class="btn btn-primary btn-sm" :disabled="distributing" @click="$emit('done')">
+          {{ distributing ? '分發完成後開始使用' : '開始使用' }}
+        </button>
       </template>
     </div>
   </div>
@@ -48,7 +75,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { open } from '@tauri-apps/plugin-dialog'
-import { api } from '../api/tauriCommands'
+import { api, type LibrarySkill } from '../api/tauriCommands'
 
 defineEmits<{ done: []; skip: [] }>()
 
@@ -57,6 +84,14 @@ const done = ref(false)
 const warn = ref('')
 const vaultPath = ref<string | null>(null)
 const isGitRepo = ref(false)
+
+// 技能全域分發引導（步驟三）
+const librarySkills = ref<LibrarySkill[]>([])
+const skillLoadWarn = ref('')
+const distributing = ref(false)
+const distributeDone = ref(false)
+const distributeMsg = ref('')
+const distributeErr = ref('')
 
 async function chooseVault() {
   warn.value = ''
@@ -70,11 +105,34 @@ async function chooseVault() {
     // 取最新狀態判斷是否已掛 git（保命建議用）
     const st = await api.getVaultStatus()
     isGitRepo.value = st.isGitRepo
+    // 讀技能庫供全域分發引導；失敗不擋流程，但區分「讀取失敗」與「確實無技能」（Codex 低）
+    try {
+      librarySkills.value = await api.listLibrarySkills()
+    } catch {
+      librarySkills.value = []
+      skillLoadWarn.value = '無法讀取技能清單，可稍後到「技能」頁分發。'
+    }
     done.value = true
   } catch (e: any) {
     warn.value = `設定失敗：${e?.message ?? e}`
   } finally {
     busy.value = false
+  }
+}
+
+// 把知識庫所有技能分發到本機全域（所有技能 × global），複用選擇性分發指令。
+async function distributeAll() {
+  distributeErr.value = ''
+  distributing.value = true
+  try {
+    const selections = librarySkills.value.map((s) => ({ skillSlug: s.slug, target: 'global' }))
+    const r = await api.distributeSkillsSelective(selections)
+    distributeMsg.value = `✓ 已分發 ${r.skillCount} 個技能到本機全域。`
+    distributeDone.value = true
+  } catch (e: any) {
+    distributeErr.value = `分發失敗：${e?.message ?? e}`
+  } finally {
+    distributing.value = false
   }
 }
 </script>
