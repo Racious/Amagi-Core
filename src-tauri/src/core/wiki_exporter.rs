@@ -10,12 +10,13 @@ pub struct WikiWriteResult {
     pub skipped: Vec<String>,
 }
 
-/// 把已接受的 wiki 候選寫進 vault（adr-002 D8/D9）。
+/// 把已接受的 wiki 候選寫進 vault（adr-004 D3 三桶；2e-後續 改寫）。
 ///
 /// 路徑規則：
 /// - `sync_targets[0]` = 目標層（"general" / "shared" / "projects/<name>"）
-/// - 專案層 → `<vault>/<layer>/pages/<category>/<slug>.md`
-/// - general / shared → `<vault>/<layer>/pages/<slug>.md`
+/// - 專案層 → `<vault>/<layer>/<bucket>/<slug>.md`，bucket 由 `doc_router::bucket_for_type`
+///   依 `type` 決定（knowledge / reports；`handoff` 防禦性落回 knowledge）
+/// - general / shared → `<vault>/<layer>/<slug>.md`（扁平，不用 pages/ 子層）
 ///
 /// 非破壞：目標檔已存在則略過，不覆寫既有手做內容（D7）。
 pub fn write_wiki_pages(vault_root: &Path, items: &[ReviewItem]) -> Result<WikiWriteResult, AppError> {
@@ -46,11 +47,15 @@ pub fn write_wiki_pages(vault_root: &Path, items: &[ReviewItem]) -> Result<WikiW
         };
 
         let dir = if layer.starts_with("projects/") {
-            // 對齊既有骨架資料夾命名：spec → specs
-            let folder = if category == "spec" { "specs" } else { category.as_str() };
-            vault_root.join(&layer).join("pages").join(folder)
+            // 專案層：依 type 落三桶（複用 doc_router 桶映射，扁平，對齊 2e-前置 遷移後結構）。
+            // 不再建舊 pages/<category>/——根治另一條「重新長出 pages/」的路徑（2e-後續）。
+            let (bucket, _) = crate::core::doc_router::bucket_for_type(&category);
+            // wiki 知識頁不會是 handoff；防禦性避免落到頂層 daily 語意的桶。
+            let bucket = if bucket == "daily" { "knowledge" } else { bucket };
+            vault_root.join(&layer).join(bucket)
         } else {
-            vault_root.join(&layer).join("pages")
+            // general / shared：扁平，不再用 pages/ 子層。
+            vault_root.join(&layer)
         };
         std::fs::create_dir_all(&dir).map_err(|e| AppError::Io(e.to_string()))?;
 
@@ -152,8 +157,10 @@ mod tests {
         let it = wiki_item("Bridge Design", "adr", "projects/amagi-core", "x");
         let res = write_wiki_pages(&dir, std::slice::from_ref(&it)).unwrap();
         assert_eq!(res.written.len(), 1);
-        let expected = dir.join("projects/amagi-core/pages/adr/bridge-design.md");
+        // 2e-後續：adr → knowledge 桶（扁平），不再 pages/adr/
+        let expected = dir.join("projects/amagi-core/knowledge/bridge-design.md");
         assert!(expected.exists());
+        assert!(!dir.join("projects/amagi-core/pages").exists(), "不再建舊 pages/");
         // 再寫一次應略過（非破壞）
         let res2 = write_wiki_pages(&dir, std::slice::from_ref(&it)).unwrap();
         assert_eq!(res2.written.len(), 0);
@@ -167,7 +174,21 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let it = wiki_item("設計模式", "concept", "general", "x");
         write_wiki_pages(&dir, std::slice::from_ref(&it)).unwrap();
-        assert!(dir.join("general/pages/設計模式.md").exists());
+        // 2e-後續：general/shared 扁平，不再 pages/ 子層
+        assert!(dir.join("general/設計模式.md").exists());
+        assert!(!dir.join("general/pages").exists(), "general 不再用 pages/ 子層");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_write_review_type_to_reports_bucket() {
+        // 2e-後續：test-report/review 類 → reports 桶（複用 doc_router 桶映射）
+        let dir = std::env::temp_dir().join(format!("amagi-wiki-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let it = wiki_item("某次審查", "review", "projects/foo", "x");
+        write_wiki_pages(&dir, std::slice::from_ref(&it)).unwrap();
+        assert!(dir.join("projects/foo/reports/某次審查.md").exists(), "review → reports 桶");
+        assert!(!dir.join("projects/foo/knowledge/某次審查.md").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
