@@ -229,14 +229,16 @@ pub fn preview_sync_diff(
 /// 全域 scope 記憶 → vault `general/agent/memory/`（Phase 3b-1，補 3a 缺口）。
 /// 跨專案：`global_memory` 應為全專案的全集（Accepted+Synced 全域記憶），索引由此重建。
 /// 與專案記憶共用 helper（memory_filename / build_memory_file / build_memory_index）。
-pub fn sync_global_memory(vault_root: &Path, global_memory: &[ReviewItem]) -> Result<Vec<String>, AppError> {
-    let mems: Vec<&ReviewItem> = global_memory.iter()
-        .filter(|i| i.item_type == ReviewItemType::Memory && i.sync_scope == SyncScope::Global)
+/// 寫某個「跨專案 scope」記憶到 vault `<tier>/agent/memory/`（general=Global、shared=Shared）。
+/// 跨專案全集 → 一事一檔 + 重建索引；複用專案記憶的 helper。
+fn sync_tier_memory(vault_root: &Path, memory: &[ReviewItem], scope: SyncScope, tier: &str) -> Result<Vec<String>, AppError> {
+    let mems: Vec<&ReviewItem> = memory.iter()
+        .filter(|i| i.item_type == ReviewItemType::Memory && i.sync_scope == scope)
         .collect();
     if mems.is_empty() {
         return Ok(Vec::new());
     }
-    let mem_dir = vault_root.join("general").join("agent").join("memory");
+    let mem_dir = vault_root.join(tier).join("agent").join("memory");
     std::fs::create_dir_all(&mem_dir).map_err(|e| AppError::Io(e.to_string()))?;
     let mut written = Vec::new();
     let entries = memory_index_entries(&mems);
@@ -252,15 +254,14 @@ pub fn sync_global_memory(vault_root: &Path, global_memory: &[ReviewItem]) -> Re
     Ok(written)
 }
 
-/// 全域記憶的 preview（general/agent/memory 每筆 + MEMORY.md），供 preview 指令附加。
-pub fn preview_global_memory(vault_root: &Path, global_memory: &[ReviewItem]) -> Vec<FileDiffPreview> {
-    let mems: Vec<&ReviewItem> = global_memory.iter()
-        .filter(|i| i.item_type == ReviewItemType::Memory && i.sync_scope == SyncScope::Global)
+fn preview_tier_memory(vault_root: &Path, memory: &[ReviewItem], scope: SyncScope, tier: &str) -> Vec<FileDiffPreview> {
+    let mems: Vec<&ReviewItem> = memory.iter()
+        .filter(|i| i.item_type == ReviewItemType::Memory && i.sync_scope == scope)
         .collect();
     if mems.is_empty() {
         return Vec::new();
     }
-    let mem_dir = vault_root.join("general").join("agent").join("memory");
+    let mem_dir = vault_root.join(tier).join("agent").join("memory");
     let entries = memory_index_entries(&mems);
     let mut previews = Vec::new();
     for (item, entry) in mems.iter().zip(&entries) {
@@ -280,6 +281,55 @@ pub fn preview_global_memory(vault_root: &Path, global_memory: &[ReviewItem]) ->
         file_path: idx_path.to_string_lossy().to_string(),
     });
     previews
+}
+
+/// 全域記憶（Global scope）→ vault `general/agent/memory/`。
+pub fn sync_global_memory(vault_root: &Path, memory: &[ReviewItem]) -> Result<Vec<String>, AppError> {
+    sync_tier_memory(vault_root, memory, SyncScope::Global, "general")
+}
+/// 共用記憶（Shared scope，Phase 3b-2）→ vault `shared/agent/memory/`。
+pub fn sync_shared_memory(vault_root: &Path, memory: &[ReviewItem]) -> Result<Vec<String>, AppError> {
+    sync_tier_memory(vault_root, memory, SyncScope::Shared, "shared")
+}
+pub fn preview_global_memory(vault_root: &Path, memory: &[ReviewItem]) -> Vec<FileDiffPreview> {
+    preview_tier_memory(vault_root, memory, SyncScope::Global, "general")
+}
+pub fn preview_shared_memory(vault_root: &Path, memory: &[ReviewItem]) -> Vec<FileDiffPreview> {
+    preview_tier_memory(vault_root, memory, SyncScope::Shared, "shared")
+}
+
+/// 升級（Phase 3b-2）：把一筆專案記憶移到 shared/agent/memory。
+/// 1) 刪舊 `projects/<vf>/agent/memory/<該筆>` + 以剩餘專案記憶重建該專案索引（清孤兒）；
+/// 2) 把 Shared 全集寫進 `shared/agent/memory/`（呼叫端以該筆的 Shared 版本含於 all_shared；
+///    queue 的 scope/status 由呼叫端在本函式 I/O 成功後才更新，失敗則維持原狀可重試）。
+/// `promoted` 用於算舊檔名（檔名僅依 title+id，與 scope 無關）。回傳 shared 寫入清單。
+pub fn promote_memory_to_shared(
+    vault_root: &Path,
+    vault_folder: &str,
+    promoted: &ReviewItem,
+    remaining_project_memory: &[ReviewItem],
+    all_shared_memory: &[ReviewItem],
+) -> Result<Vec<String>, AppError> {
+    // 1) 刪舊專案檔
+    let proj_mem_dir = vault_root.join(vault_folder).join("agent").join("memory");
+    let old_file = proj_mem_dir.join(memory_filename(promoted));
+    if old_file.is_file() {
+        std::fs::remove_file(&old_file).map_err(|e| AppError::Io(e.to_string()))?;
+    }
+    // 以剩餘專案記憶重建該專案索引（孤兒清除）
+    let proj_mems: Vec<&ReviewItem> = remaining_project_memory.iter()
+        .filter(|i| i.item_type == ReviewItemType::Memory && i.sync_scope == SyncScope::Project)
+        .collect();
+    let proj_idx = proj_mem_dir.join("MEMORY.md");
+    if proj_mems.is_empty() {
+        let _ = std::fs::remove_file(&proj_idx);
+    } else {
+        let entries = memory_index_entries(&proj_mems);
+        std::fs::write(&proj_idx, markdown::build_memory_index(&entries))
+            .map_err(|e| AppError::Io(e.to_string()))?;
+    }
+    // 2) 寫 Shared 全集 → shared/agent/memory
+    sync_tier_memory(vault_root, all_shared_memory, SyncScope::Shared, "shared")
 }
 
 #[cfg(test)]
@@ -354,6 +404,35 @@ mod tests {
         let p = mem("p1", "專案記憶", SyncScope::Project);
         assert!(sync_global_memory(&vault, std::slice::from_ref(&p)).unwrap().is_empty(),
             "Project scope 不該被 sync_global_memory 寫入");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_promote_memory_to_shared_moves_file() {
+        let root = std::env::temp_dir().join(format!("amagi-promote-{}", uuid::Uuid::new_v4()));
+        let vault = root.join("vault");
+        let vf = "projects/foo";
+        // 預先在專案層寫一筆記憶（模擬已同步）
+        let proj_mem = mem("m1", "悔棋", SyncScope::Project);
+        let proj_dir = vault.join(vf).join("agent").join("memory");
+        std::fs::create_dir_all(&proj_dir).unwrap();
+        let fname = memory_filename(&proj_mem);
+        std::fs::write(proj_dir.join(&fname), markdown::build_memory_file(&proj_mem)).unwrap();
+        std::fs::write(proj_dir.join("MEMORY.md"), "舊索引").unwrap();
+
+        // 升級：該筆改 Shared、無剩餘專案記憶、all_shared 含該筆
+        let mut shared = proj_mem.clone();
+        shared.sync_scope = SyncScope::Shared;
+        promote_memory_to_shared(&vault, vf, &proj_mem, &[], std::slice::from_ref(&shared)).unwrap();
+
+        // 舊專案檔刪、無剩餘 → 專案索引移除
+        assert!(!proj_dir.join(&fname).is_file(), "舊專案記憶檔應被刪");
+        assert!(!proj_dir.join("MEMORY.md").is_file(), "無剩餘專案記憶 → 索引移除");
+        // shared 落點建立 + 索引
+        let shared_dir = vault.join("shared").join("agent").join("memory");
+        assert!(shared_dir.join(&fname).is_file(), "應在 shared/agent/memory 建立記憶檔");
+        assert!(shared_dir.join("MEMORY.md").is_file(), "應建立 shared 索引");
 
         let _ = std::fs::remove_dir_all(&root);
     }

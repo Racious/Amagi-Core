@@ -44,11 +44,11 @@ pub async fn sync_agent_files(
             && matches!(i.status, ReviewStatus::Accepted | ReviewStatus::Synced))
         .cloned()
         .collect();
-    // Phase 3b-1：全域 scope 記憶為「跨專案全集」→ vault general/agent/memory；索引由全集重建
-    let all_global_memory: Vec<ReviewItem> = review_queue::list_items(&data_dir, None)
+    // Phase 3b：跨專案 scope 記憶全集（Global→general、Shared→shared）→ 各自 vault 桶；索引由全集重建
+    let all_cross_memory: Vec<ReviewItem> = review_queue::list_items(&data_dir, None)
         .into_iter()
         .filter(|i| i.item_type == ReviewItemType::Memory
-            && i.sync_scope == SyncScope::Global
+            && matches!(i.sync_scope, SyncScope::Global | SyncScope::Shared)
             && matches!(i.status, ReviewStatus::Accepted | ReviewStatus::Synced))
         .collect();
 
@@ -69,9 +69,9 @@ pub async fn sync_agent_files(
     // hard gate（Phase 3a/3c）：有專案記憶或技能但 vault 未設 → 拒絕，
     // 避免記憶/技能無落點卻仍被標 Synced（資料遺失）。
     let has_skills = accepted.iter().any(|i| i.item_type == ReviewItemType::Skill);
-    // 全域記憶為跨專案全集 → gate 以全集判斷（不只本專案），與實際會寫入的範圍一致（Codex 3b-1 追審）
-    let has_global = all_global_memory.iter().any(|i| i.status == ReviewStatus::Accepted);
-    if (!all_project_memory.is_empty() || has_skills || has_global) && vault_root.is_none() {
+    // 跨專案記憶（Global/Shared）為全集 → gate 以全集判斷，與實際會寫入的範圍一致
+    let has_cross = all_cross_memory.iter().any(|i| i.status == ReviewStatus::Accepted);
+    if (!all_project_memory.is_empty() || has_skills || has_cross) && vault_root.is_none() {
         return Err(AppError::InvalidPath(
             "尚未設定 vault 路徑：記憶/技能需寫入 vault，請先到「設定」指定 vault 資料夾".into()));
     }
@@ -84,18 +84,17 @@ pub async fn sync_agent_files(
     )?;
     result.project_id = project_id.clone();
 
-    // Phase 3b-1：全域記憶 → vault general/agent/memory（跨專案全集；補 3a 缺口）
+    // Phase 3b：全域/共用記憶 → vault general/shared agent/memory（跨專案全集）
     if let Some(vroot) = vault_root.as_deref().map(std::path::Path::new) {
-        let global_written = agent_exporter::sync_global_memory(vroot, &all_global_memory)?;
-        result.written_files.extend(global_written);
+        result.written_files.extend(agent_exporter::sync_global_memory(vroot, &all_cross_memory)?);
+        result.written_files.extend(agent_exporter::sync_shared_memory(vroot, &all_cross_memory)?);
     }
 
     // ── 同步完成後標記為 Synced ───────────────────────
-    // 3b-1 後全域記憶已有 vault 落點 → 全部 accepted（含本專案全域記憶）皆標 Synced
+    // 跨專案記憶已有 vault 落點 → 全部 accepted + 實際寫入的跨專案 Accepted 記憶皆標 Synced
     let mut synced_ids: Vec<String> = accepted.iter().map(|i| i.id.clone()).collect();
-    // 跨專案寫入 vault 的 Accepted 全域記憶也一併標 Synced，否則別專案的會卡 Accepted、每次 sync 重寫（Codex 3b-1 #1）
     if vault_root.is_some() {
-        for g in &all_global_memory {
+        for g in &all_cross_memory {
             if g.status == ReviewStatus::Accepted && !synced_ids.contains(&g.id) {
                 synced_ids.push(g.id.clone());
             }
@@ -140,17 +139,17 @@ pub async fn preview_sync_diff(
             && matches!(i.status, ReviewStatus::Accepted | ReviewStatus::Synced))
         .cloned()
         .collect();
-    let all_global_memory: Vec<ReviewItem> = review_queue::list_items(&data_dir, None)
+    let all_cross_memory: Vec<ReviewItem> = review_queue::list_items(&data_dir, None)
         .into_iter()
         .filter(|i| i.item_type == ReviewItemType::Memory
-            && i.sync_scope == SyncScope::Global
+            && matches!(i.sync_scope, SyncScope::Global | SyncScope::Shared)
             && matches!(i.status, ReviewStatus::Accepted | ReviewStatus::Synced))
         .collect();
     let vault_root = vault_manager::get_vault_config(&data_dir).vault_path;
-    // 與 sync 一致的 hard gate：vault 未設 + 有專案記憶/技能/全域記憶 → preview 也報錯。
+    // 與 sync 一致的 hard gate：vault 未設 + 有專案記憶/技能/跨專案記憶 → preview 也報錯。
     let has_skills = accepted.iter().any(|i| i.item_type == ReviewItemType::Skill);
-    let has_global = all_global_memory.iter().any(|i| i.status == ReviewStatus::Accepted);
-    if (!all_project_memory.is_empty() || has_skills || has_global) && vault_root.is_none() {
+    let has_cross = all_cross_memory.iter().any(|i| i.status == ReviewStatus::Accepted);
+    if (!all_project_memory.is_empty() || has_skills || has_cross) && vault_root.is_none() {
         return Err(AppError::InvalidPath(
             "尚未設定 vault 路徑：記憶/技能需寫入 vault，請先到「設定」指定 vault 資料夾".into()));
     }
@@ -163,11 +162,70 @@ pub async fn preview_sync_diff(
         &accepted,
         &all_project_memory,
     );
-    // Phase 3b-1：附上全域記憶（general/agent/memory）的 preview
+    // Phase 3b：附上全域/共用記憶（general/shared agent/memory）的 preview
     if let Some(vroot) = vault_root_path {
-        previews.extend(agent_exporter::preview_global_memory(vroot, &all_global_memory));
+        previews.extend(agent_exporter::preview_global_memory(vroot, &all_cross_memory));
+        previews.extend(agent_exporter::preview_shared_memory(vroot, &all_cross_memory));
     }
     Ok(previews)
+}
+
+/// Phase 3b-2 升級：把一筆「已同步的專案層記憶」提升為跨專案共用（scope→Shared、移到 shared/agent/memory）。
+#[tauri::command]
+pub async fn promote_memory(item_id: String, state: State<'_, AppState>) -> Result<(), AppError> {
+    let data_dir = state.data_dir.clone();
+    let item = review_queue::list_items(&data_dir, None)
+        .into_iter()
+        .find(|i| i.id == item_id)
+        .ok_or_else(|| AppError::InvalidPath(format!("找不到記憶項：{item_id}")))?;
+    if item.item_type != ReviewItemType::Memory
+        || item.sync_scope != SyncScope::Project
+        || !matches!(item.status, ReviewStatus::Accepted | ReviewStatus::Synced)
+    {
+        return Err(AppError::InvalidPath("只能升級「已同步的專案層記憶」到共用".into()));
+    }
+    let project = project_manager::get_project(&item.project_id, &data_dir)
+        .ok_or_else(|| AppError::ProjectNotFound(item.project_id.clone()))?;
+    let vault_root = vault_manager::get_vault_config(&data_dir).vault_path
+        .ok_or_else(|| AppError::InvalidPath("尚未設定 vault 路徑，無法升級記憶".into()))?;
+    let vault_folder = project.vault_folder.clone()
+        .unwrap_or_else(|| agent_exporter::project_vault_folder(&project.path));
+
+    // 先在記憶體算「升級後」預期集合，不先動 queue——避免 I/O 失敗留半升級狀態（Codex 3b-2 #2）
+    let all = review_queue::list_items(&data_dir, None);
+    // 本專案剩餘 Project 記憶（排除這筆）
+    let remaining_project: Vec<ReviewItem> = all.iter()
+        .filter(|i| i.project_id == item.project_id
+            && i.id != item_id
+            && i.item_type == ReviewItemType::Memory
+            && i.sync_scope == SyncScope::Project
+            && matches!(i.status, ReviewStatus::Accepted | ReviewStatus::Synced))
+        .cloned()
+        .collect();
+    // 既有 Shared 記憶 + 這筆（預設為 Shared）
+    let mut all_shared: Vec<ReviewItem> = all.iter()
+        .filter(|i| i.item_type == ReviewItemType::Memory
+            && i.sync_scope == SyncScope::Shared
+            && matches!(i.status, ReviewStatus::Accepted | ReviewStatus::Synced))
+        .cloned()
+        .collect();
+    let mut promoted_shared = item.clone();
+    promoted_shared.sync_scope = SyncScope::Shared;
+    all_shared.push(promoted_shared);
+
+    // 先完成檔案 I/O（移舊專案檔 + 重建專案索引 + 寫 shared 全集）
+    agent_exporter::promote_memory_to_shared(
+        std::path::Path::new(&vault_root),
+        &vault_folder,
+        &item,
+        &remaining_project,
+        &all_shared,
+    )?;
+
+    // I/O 成功後才更新 queue：scope → Shared、標 Synced
+    review_queue::set_scope(&data_dir, &item_id, SyncScope::Shared)?;
+    review_queue::mark_synced(&data_dir, std::slice::from_ref(&item_id))?;
+    Ok(())
 }
 
 #[cfg(test)]

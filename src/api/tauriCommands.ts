@@ -40,7 +40,7 @@ export type ReviewItemType = 'memory' | 'skill' | 'blocked' | 'wiki'
 export type RiskLevel = 'low' | 'medium' | 'high'
 export type ReviewStatus = 'pending' | 'accepted' | 'ignored' | 'synced'
 
-export type SyncScope = 'project' | 'global'
+export type SyncScope = 'project' | 'shared' | 'global'
 
 export interface ReviewItem {
   id: string
@@ -236,6 +236,8 @@ export const api = {
 
   syncAgentFiles: (projectId: string, force = false) => invoke<SyncResult>('sync_agent_files', { projectId, force }),
   previewSyncDiff: (projectId: string) => invoke<FileDiffPreview[]>('preview_sync_diff', { projectId }),
+  /** Phase 3b-2：把一筆已同步的專案層記憶升級為跨專案共用（移到 vault shared/agent/memory）。 */
+  promoteMemory: (itemId: string) => invoke<void>('promote_memory', { itemId }),
 
   // ── 差異匯出 ──────────────────────────────────────
   listChangedFiles: (projectId: string) => invoke<ChangedFile[]>('list_changed_files', { projectId }),

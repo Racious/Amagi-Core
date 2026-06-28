@@ -1,7 +1,7 @@
 use std::path::Path;
 use chrono::Utc;
 use crate::AppError;
-use crate::models::review::{ReviewItem, ReviewQueueData, ReviewStatus};
+use crate::models::review::{ReviewItem, ReviewQueueData, ReviewStatus, SyncScope};
 use crate::utils::json_store;
 
 fn queue_path(data_dir: &Path) -> std::path::PathBuf {
@@ -46,6 +46,18 @@ pub fn ignore_items(data_dir: &Path, ids: &[String]) -> Result<(), AppError> {
         if ids.contains(&item.id) {
             item.status = ReviewStatus::Ignored;
             item.reviewed_at = Some(Utc::now());
+        }
+    }
+    json_store::write_json(&path, &data)
+}
+
+/// 變更某筆 item 的 sync_scope（Phase 3b-2 升級用：Project → Shared）。
+pub fn set_scope(data_dir: &Path, id: &str, scope: SyncScope) -> Result<(), AppError> {
+    let path = queue_path(data_dir);
+    let mut data: ReviewQueueData = json_store::read_json_or_default(&path);
+    for item in &mut data.items {
+        if item.id == id {
+            item.sync_scope = scope.clone();
         }
     }
     json_store::write_json(&path, &data)

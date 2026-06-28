@@ -55,10 +55,11 @@ pub fn scan_pending_skills(
         let title = extract_field(&frontmatter, "title")
             .unwrap_or_else(|| name.trim_end_matches(".md").to_string());
         let scope_str = extract_field(&frontmatter, "scope").unwrap_or_default();
-        let sync_scope = if scope_str.to_lowercase() == "global" {
-            SyncScope::Global
-        } else {
-            SyncScope::Project
+        // 三層標籤驅動：project / shared / global；未知值保守 fallback Project（Codex 3b-2 #1）
+        let sync_scope = match scope_str.to_lowercase().as_str() {
+            "global" => SyncScope::Global,
+            "shared" => SyncScope::Shared,
+            _ => SyncScope::Project,
         };
 
         let item = ReviewItem {
@@ -142,5 +143,24 @@ mod tests {
         let (fm, body) = split_frontmatter(content);
         assert!(fm.is_empty());
         assert!(body.contains("## 步驟"));
+    }
+
+    #[test]
+    fn test_scan_parses_three_scopes() {
+        // scope: project / shared / global / 未標 → 對應 SyncScope，未知 fallback Project（Codex 3b-2 #1）
+        let root = std::env::temp_dir().join(format!("amagi-pending-{}", Uuid::new_v4()));
+        let pending = root.join(".amagi").join("pending");
+        std::fs::create_dir_all(&pending).unwrap();
+        std::fs::write(pending.join("skill-s.md"), "---\ntitle: 共用技能\nscope: shared\n---\n## 描述\n做某事").unwrap();
+        std::fs::write(pending.join("skill-g.md"), "---\ntitle: 全域技能\nscope: global\n---\n## 描述\n做某事").unwrap();
+        std::fs::write(pending.join("skill-u.md"), "---\ntitle: 未標技能\n---\n## 描述\n做某事").unwrap();
+
+        let items = scan_pending_skills(root.to_str().unwrap(), "p1", &[]).unwrap();
+        let scope_of = |t: &str| items.iter().find(|i| i.title == t).unwrap().sync_scope.clone();
+        assert_eq!(scope_of("共用技能"), SyncScope::Shared);
+        assert_eq!(scope_of("全域技能"), SyncScope::Global);
+        assert_eq!(scope_of("未標技能"), SyncScope::Project);
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

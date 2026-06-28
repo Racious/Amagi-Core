@@ -7,6 +7,8 @@ use chrono::{DateTime, Utc};
 #[serde(rename_all = "camelCase")]
 pub enum SyncScope {
     Project,
+    /// 跨專案共用（Phase 3b-2）：記憶落 vault `shared/agent/memory/`。
+    Shared,
     Global,
 }
 
