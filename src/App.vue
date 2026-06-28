@@ -1,6 +1,6 @@
 <template>
-  <OnboardingVault v-if="showOnboarding" @done="showOnboarding = false" @skip="showOnboarding = false" />
   <div class="flex h-screen overflow-hidden bg-canvas">
+    <OnboardingVault v-if="showOnboarding" @done="showOnboarding = false" @skip="showOnboarding = false" />
     <aside class="w-60 flex-shrink-0 flex flex-col bg-surface border-r border-border">
       <!-- 品牌 -->
       <div class="px-4 h-14 flex items-center gap-2.5 border-b border-border">
