@@ -95,6 +95,38 @@ pub fn run() {
             core::tray::setup_tray(app.handle())?;
 
             let window = app.get_webview_window("main").unwrap();
+
+            // 明確指定主視窗（工作列 ICON_BIG）圖示為高解析 256px。
+            // 否則 Tauri 預設視窗圖示會挑 bundle.icon 清單裡的小 PNG（32x32），
+            // 工作列以小圖放大顯示 → 模糊；改餵 256px 讓 Windows 往下縮，清晰。
+            // 桌面捷徑/exe 用多尺寸 .ico 不受影響（本來就清晰）。
+            if let Ok(icon) = tauri::image::Image::from_bytes(include_bytes!("../icons/128x128@2x.png")) {
+                let _ = window.set_icon(icon);
+            }
+
+            // 標題列/Alt-Tab 小圖（ICON_SMALL, ~16px）另餵 32px 小尺寸專用圖：
+            // Tauri set_icon 會把 ICON_BIG/SMALL 設成同一張 256，標題列硬縮到 16 會有白點雜訊。
+            // 此處用原生 WM_SETICON 單獨覆寫 ICON_SMALL（與系統匣同款 32px，縮放乾淨），
+            // ICON_BIG（256，工作列）維持不變。建立失敗則沿用上面的 set_icon，不致退步。
+            #[cfg(windows)]
+            {
+                use windows_sys::Win32::UI::WindowsAndMessaging::{
+                    CreateIconFromResourceEx, SendMessageW, ICON_SMALL, LR_DEFAULTCOLOR, WM_SETICON,
+                };
+                if let Ok(hwnd) = window.hwnd() {
+                    let png: &[u8] = include_bytes!("../icons/32x32.png");
+                    // ficon=TRUE(1)、dwver=0x00030000(3.0)、cx/cy=0 取原生 32px
+                    let hicon = unsafe {
+                        CreateIconFromResourceEx(png.as_ptr(), png.len() as u32, 1, 0x0003_0000, 0, 0, LR_DEFAULTCOLOR)
+                    };
+                    if !hicon.is_null() {
+                        unsafe {
+                            SendMessageW(hwnd.0 as _, WM_SETICON, ICON_SMALL as usize, hicon as isize);
+                        }
+                    }
+                }
+            }
+
             let app_handle = app.handle().clone();
             window.on_window_event(move |event| {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
