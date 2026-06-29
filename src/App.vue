@@ -100,6 +100,7 @@ const navGroups = [
       { to: '/run', icon: '▶️', label: '引導式執行', badge: false },
       { to: '/learn', icon: '🔍', label: '學習變更', badge: false },
       { to: '/review', icon: '📋', label: '審核佇列', badge: true },
+      { to: '/memory', icon: '🧠', label: '記憶庫', badge: false },
       { to: '/skills', icon: '⚡', label: '技能管理', badge: false },
       { to: '/sync', icon: '🔄', label: '同步預覽', badge: false },
       { to: '/diff-export', icon: '🧾', label: '差異匯出', badge: false },

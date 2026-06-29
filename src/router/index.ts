@@ -10,6 +10,7 @@ const router = createRouter({
     { path: '/learn', name: 'learn', component: () => import('../pages/LearnPage.vue') },
     { path: '/review', name: 'review', component: () => import('../pages/ReviewQueuePage.vue') },
     { path: '/skills', name: 'skills', component: () => import('../pages/SkillsPage.vue') },
+    { path: '/memory', name: 'memory', component: () => import('../pages/MemoryPage.vue') },
     { path: '/sync', name: 'sync', component: () => import('../pages/SyncPreviewPage.vue') },
     { path: '/diff-export', name: 'diffExport', component: () => import('../pages/DiffExportPage.vue') },
     { path: '/workflows', name: 'workflows', component: () => import('../pages/WorkflowsPage.vue') },
