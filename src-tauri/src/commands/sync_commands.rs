@@ -90,6 +90,17 @@ pub async fn sync_agent_files(
         result.written_files.extend(agent_exporter::sync_shared_memory(vroot, &all_cross_memory)?);
     }
 
+    // 內聯索引自動刷新：把更新後的 general/shared 記憶索引重寫進全域錨點，
+    // 使新對話開場即讀到最新（不必手動重設 vault）。失敗不回滾已完成的同步，
+    // 但須讓使用者「看得到」錨點未刷新（Codex 中 #2）——否則記憶標 Synced 卻讀不到。
+    if vault_root.is_some() {
+        if let Err(e) = vault_manager::refresh_global_anchor(&data_dir) {
+            result.skipped_files.push(format!(
+                "⚠ 全域錨點刷新失敗（{e}）：記憶已寫入 vault，但 ~/.claude/CLAUDE.md／~/.codex/AGENTS.md 未更新，新對話可能讀到舊索引；請到「設定」重設一次 vault 路徑。"
+            ));
+        }
+    }
+
     // ── 同步完成後標記為 Synced ───────────────────────
     // 跨專案記憶已有 vault 落點 → 全部 accepted + 實際寫入的跨專案 Accepted 記憶皆標 Synced
     let mut synced_ids: Vec<String> = accepted.iter().map(|i| i.id.clone()).collect();
@@ -213,18 +224,47 @@ pub async fn promote_memory(item_id: String, state: State<'_, AppState>) -> Resu
     promoted_shared.sync_scope = SyncScope::Shared;
     all_shared.push(promoted_shared);
 
-    // 先完成檔案 I/O（移舊專案檔 + 重建專案索引 + 寫 shared 全集）
-    agent_exporter::promote_memory_to_shared(
+    // queue-first：先把登記簿定案（scope→Shared 且 Synced，原子單次寫入，無中間態）。
+    // queue 是真相來源，sync 本就「讓 vault 對齊 queue」，故先定案、再讓 vault 對齊；
+    // 即使後續 vault 對齊失敗，queue 已說共用 → 按「同步」或下次 sync 自癒、且不重複。
+    review_queue::promote_scope_and_mark_synced(&data_dir, &item_id)?;
+
+    // 讓 vault 對齊 queue（冪等：移舊專案檔[存在才刪] + 重建索引 + 寫 shared 全集）。
+    // 失敗時 queue 已是共用 → 回明確訊息引導按「同步」校正（sync 會對齊、不重複）。
+    if let Err(e) = agent_exporter::promote_memory_to_shared(
         std::path::Path::new(&vault_root),
         &vault_folder,
         &item,
         &remaining_project,
         &all_shared,
-    )?;
+    ) {
+        return Err(AppError::Io(format!(
+            "已標記為共用，但檔案搬移未完成（{e}）。請按「同步」校正——系統會照登記簿把檔案補到位、不會重複。"
+        )));
+    }
 
-    // I/O 成功後才更新 queue：scope → Shared、標 Synced
-    review_queue::set_scope(&data_dir, &item_id, SyncScope::Shared)?;
-    review_queue::mark_synced(&data_dir, std::slice::from_ref(&item_id))?;
+    // ── 次要反映（best-effort，失敗不回滾已完成的升級）──
+    // 重寫來源專案 AGENTS/CLAUDE 的內聯索引：升級後 vault 已少這一筆，必讀檔須同步，
+    // 否則殘留舊內聯條目誤導 AI（Codex 中 #3）。以「剩餘專案記憶」重建（空→「（尚無）」）。
+    let remaining_refs: Vec<&ReviewItem> = remaining_project.iter().collect();
+    let entries = agent_exporter::memory_index_entries(&remaining_refs);
+    let bullets = crate::utils::markdown::memory_bullets(&entries);
+    let agents_path = std::path::Path::new(&project.path).join("AGENTS.md");
+    if agents_path.exists() {
+        let _ = crate::utils::markdown::write_with_backup(
+            &agents_path,
+            &crate::utils::markdown::build_agents_md(&vault_folder, &bullets),
+        );
+    }
+    let claude_path = std::path::Path::new(&project.path).join("CLAUDE.md");
+    if claude_path.exists() {
+        let _ = crate::utils::markdown::write_with_backup(
+            &claude_path,
+            &crate::utils::markdown::build_claude_md(Some(&vault_folder), &bullets),
+        );
+    }
+    // shared 已變動 → 刷新全域錨點內聯索引（best-effort）。
+    let _ = vault_manager::refresh_global_anchor(&data_dir);
     Ok(())
 }
 

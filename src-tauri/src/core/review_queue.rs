@@ -51,23 +51,25 @@ pub fn ignore_items(data_dir: &Path, ids: &[String]) -> Result<(), AppError> {
     json_store::write_json(&path, &data)
 }
 
-/// 變更某筆 item 的 sync_scope（Phase 3b-2 升級用：Project → Shared）。
-pub fn set_scope(data_dir: &Path, id: &str, scope: SyncScope) -> Result<(), AppError> {
-    let path = queue_path(data_dir);
-    let mut data: ReviewQueueData = json_store::read_json_or_default(&path);
-    for item in &mut data.items {
-        if item.id == id {
-            item.sync_scope = scope.clone();
-        }
-    }
-    json_store::write_json(&path, &data)
-}
-
 pub fn mark_synced(data_dir: &Path, ids: &[String]) -> Result<(), AppError> {
     let path = queue_path(data_dir);
     let mut data: ReviewQueueData = json_store::read_json_or_default(&path);
     for item in &mut data.items {
         if ids.contains(&item.id) {
+            item.status = ReviewStatus::Synced;
+        }
+    }
+    json_store::write_json(&path, &data)
+}
+
+/// 原子升級：單次讀寫，同時把指定項 scope→Shared 且 status→Synced。
+/// 避免「set_scope 成功、mark_synced 失敗」的 Shared+Accepted 中間態（Codex r3 低）。
+pub fn promote_scope_and_mark_synced(data_dir: &Path, id: &str) -> Result<(), AppError> {
+    let path = queue_path(data_dir);
+    let mut data: ReviewQueueData = json_store::read_json_or_default(&path);
+    for item in &mut data.items {
+        if item.id == id {
+            item.sync_scope = SyncScope::Shared;
             item.status = ReviewStatus::Synced;
         }
     }

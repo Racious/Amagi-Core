@@ -27,20 +27,98 @@ fn memory_filename(item: &ReviewItem) -> String {
     format!("{}-{}.md", base, short_id)
 }
 
-/// 由記憶項算出索引列：(檔名, 標題, 一句 hook)。sync 與 preview 共用，避免漂移。
-fn memory_index_entries(items: &[&ReviewItem]) -> Vec<(String, String, String)> {
+/// 專案 vault_folder 是否安全（相對、各段皆 Normal、首段為 `projects`）。
+/// 孤兒清理是刪檔表面，刪前以此擋 `..`/絕對路徑/非 projects 形式逃逸出 vault（Codex r3 高）。
+fn is_safe_project_vault_folder(vf: &str) -> bool {
+    let p = Path::new(vf);
+    !vf.is_empty()
+        && p.is_relative()
+        && p.components().all(|c| matches!(c, std::path::Component::Normal(_)))
+        && matches!(p.components().next(),
+            Some(std::path::Component::Normal(s)) if s == std::ffi::OsStr::new("projects"))
+}
+
+/// 檔名是否像 Amagi 產生的記憶檔（`<slug>-<1..8 ascii 英數>.md`）。
+/// 孤兒清理只刪此格式，避免誤刪同目錄中手放的 `.md`（Codex r3 高）。
+fn looks_like_memory_file(name: &str) -> bool {
+    match name.strip_suffix(".md").and_then(|stem| stem.rfind('-').map(|i| (stem, i))) {
+        Some((stem, i)) if i > 0 => {
+            let sfx = &stem[i + 1..];
+            !sfx.is_empty() && sfx.len() <= 8 && sfx.chars().all(|c| c.is_ascii_alphanumeric())
+        }
+        _ => false,
+    }
+}
+
+/// 安全解析專案記憶目錄 `<vault_root>/<vault_folder>/agent/memory`——作為「寫入＋刪除」的**唯一閘**
+/// （Codex r4 高/中：sync 與 promote 兩條路徑都走此 helper，杜絕只封一支）。
+/// 回傳 Some(dir) 僅當：① vault_folder 安全（相對/全 Normal/首段 projects）；
+/// ② 該目錄「最深既存祖先」canonical 落在 canonical vault_root 之下（擋 symlink/junction 逃逸）。
+/// 目錄可尚未存在（首次寫入）：對不存在路徑逐層上溯到既存祖先再驗。否則 None（呼叫端 skip/報錯）。
+fn safe_project_memory_dir(vault_root: &Path, vault_folder: &str) -> Option<PathBuf> {
+    if !is_safe_project_vault_folder(vault_folder) {
+        return None;
+    }
+    let mem_dir = vault_root.join(vault_folder).join("agent").join("memory");
+    // 從 mem_dir 上溯到「最深既存祖先」並 canonicalize（安全閘 fail-closed，Codex r5 中）：
+    // 只把 NotFound 視為「尚不存在、繼續上溯」；權限/IO 等其他錯誤一律 None，不 fail-open。
+    let mut anc: &Path = mem_dir.as_path();
+    let canon_ancestor = loop {
+        match anc.canonicalize() {
+            Ok(c) => break c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => anc = anc.parent()?,
+            Err(_) => return None,
+        }
+    };
+    // vault_root 已存在 → 要求最深既存祖先落在 canonical vault_root 下（擋 vault 內既存 symlink/junction 逃逸）。
+    // vault_root 為 NotFound（首次建立）→ 祖先已成功解析 + vault_folder 乾淨（無 ../絕對）→ 下方皆為待建乾淨段，安全。
+    match vault_root.canonicalize() {
+        Ok(croot) => if canon_ancestor.starts_with(&croot) { Some(mem_dir) } else { None },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(mem_dir),
+        Err(_) => None,
+    }
+}
+
+/// 由記憶內文取一句 hook（索引速查用）：優先 frontmatter 的 `description`，
+/// 否則取 frontmatter 之後第一行非空、非標題的正文。跳過 YAML frontmatter，
+/// 避免把 `---` 或 `name:` 當 hook（實機發現：原本抓「第一行非空」會誤抓 `---`）。截斷 40 字。
+fn memory_hook(content: &str) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    let mut i = 0;
+    if lines.first().map(|l| l.trim()) == Some("---") {
+        i = 1;
+        while i < lines.len() {
+            let t = lines[i].trim();
+            if t == "---" { i += 1; break; }
+            if let Some(rest) = t.strip_prefix("description:") {
+                let d = rest.trim().trim_matches(['"', '\'']).trim();
+                if !d.is_empty() { return truncate_hook(d); }
+            }
+            i += 1;
+        }
+    }
+    while i < lines.len() {
+        let t = lines[i].trim();
+        if !t.is_empty() && !t.starts_with('#') && t != "---" {
+            return truncate_hook(t.trim_start_matches(|c| c == '-' || c == '*' || c == ' '));
+        }
+        i += 1;
+    }
+    String::new()
+}
+
+fn truncate_hook(s: &str) -> String {
+    if s.chars().count() > 40 {
+        format!("{}…", s.chars().take(40).collect::<String>())
+    } else {
+        s.to_string()
+    }
+}
+
+/// 由記憶項算出索引列：(檔名, 標題, 一句 hook)。sync / preview / promote 共用，避免漂移。
+pub(crate) fn memory_index_entries(items: &[&ReviewItem]) -> Vec<(String, String, String)> {
     items.iter().map(|item| {
-        let fname = memory_filename(item);
-        let hook = item.content.lines()
-            .map(str::trim)
-            .find(|l| !l.is_empty())
-            .map(|l| if l.chars().count() > 40 {
-                format!("{}…", l.chars().take(40).collect::<String>())
-            } else {
-                l.to_string()
-            })
-            .unwrap_or_default();
-        (fname, item.title.clone(), hook)
+        (memory_filename(item), item.title.clone(), memory_hook(&item.content))
     }).collect()
 }
 
@@ -94,35 +172,84 @@ pub fn sync_agent_files(
         .map(|s| s.to_string())
         .unwrap_or_else(|| project_vault_folder(project_path));
 
-    // ── 專案層記憶 → vault `<vault_folder>/agent/memory/`（Phase 3a：A 純指標）──
-    // 收 Accepted+Synced 全部專案記憶寫成「一事一檔」+ 重建 MEMORY.md 索引；
-    // 專案 AGENTS.md / CLAUDE.md 改為純指標（記憶內容保全於 vault，非破壞）。
+    // ── 專案層記憶 → vault `<vault_folder>/agent/memory/`；專案 AGENTS/CLAUDE 內聯索引 ──
+    // 收 Accepted+Synced 全部專案記憶寫成「一事一檔」+ 重建 MEMORY.md 索引。
+    // 專案 AGENTS/CLAUDE 內聯本專案記憶索引（非僅指標，實測薄指標不被跟讀）。
     let project_mem: Vec<&ReviewItem> = all_project_memory.iter()
         .filter(|i| i.item_type == ReviewItemType::Memory && i.sync_scope == SyncScope::Project)
         .collect();
-    if let (Some(vroot), false) = (vault_root, project_mem.is_empty()) {
-        let mem_dir = vroot.join(&vault_folder).join("agent").join("memory");
-        std::fs::create_dir_all(&mem_dir).map_err(|e| AppError::Io(e.to_string()))?;
-
+    if let Some(vroot) = vault_root {
         let entries = memory_index_entries(&project_mem);
-        for (item, entry) in project_mem.iter().zip(&entries) {
-            let path = mem_dir.join(&entry.0);
-            markdown::write_with_backup(&path, &markdown::build_memory_file(item))?;
-            written.push(path.to_string_lossy().to_string());
-        }
-        // 重建索引（entries 已涵蓋全部 Accepted+Synced 專案記憶 → 即完整索引）
-        let idx_path = mem_dir.join("MEMORY.md");
-        std::fs::write(&idx_path, markdown::build_memory_index(&entries))
-            .map_err(|e| AppError::Io(e.to_string()))?;
-        written.push(idx_path.to_string_lossy().to_string());
 
-        // 專案 AGENTS.md / CLAUDE.md → 純指標
-        let agents_path = Path::new(project_path).join("AGENTS.md");
-        markdown::write_with_backup(&agents_path, &markdown::build_agents_md(&vault_folder))?;
-        written.push(agents_path.to_string_lossy().to_string());
-        let claude_path = Path::new(project_path).join("CLAUDE.md");
-        markdown::write_with_backup(&claude_path, &markdown::build_claude_md(Some(&vault_folder)))?;
-        written.push(claude_path.to_string_lossy().to_string());
+        // 安全閘：以共用 helper 解析記憶目錄（驗 vault_folder + canonical containment）。
+        // 寫記憶檔/索引、孤兒清理、專案 AGENTS/CLAUDE 內聯，全部只在安全閘通過後才動（Codex r4/r7）。
+        match safe_project_memory_dir(vroot, &vault_folder) {
+            // hard gate（Codex r7 高）：有專案記憶要寫、但 vault_folder 不安全 → 直接 Err，
+            // 阻止外層 mark_synced（不可「沒寫進 vault 卻標已同步」，違反 Phase 3a hard gate）。
+            None if !project_mem.is_empty() => {
+                return Err(AppError::InvalidPath(format!(
+                    "不安全的 vault_folder「{vault_folder}」，拒絕寫入專案記憶（避免逃逸 vault）"
+                )));
+            }
+            // 不安全且無專案記憶 → 無可寫/可清，整段跳過（不動 vault、不重寫專案 md）。
+            None => {}
+            Some(mem_dir) => {
+                // 個別記憶檔：有記憶才寫
+                if !entries.is_empty() {
+                    std::fs::create_dir_all(&mem_dir).map_err(|e| AppError::Io(e.to_string()))?;
+                    for (item, entry) in project_mem.iter().zip(&entries) {
+                        let path = mem_dir.join(&entry.0);
+                        // 衍生檔（可由 queue 重建）→ 無備份寫入，避免 agent/memory 累積 .bak 雜物。
+                        std::fs::write(&path, markdown::build_memory_file(item)).map_err(|e| AppError::Io(e.to_string()))?;
+                        written.push(path.to_string_lossy().to_string());
+                    }
+                }
+                // MEMORY.md 索引 + 孤兒對帳清理：有記憶、或曾有現空（mem_dir 仍在 → 寫空索引反映「已無」）
+                if !entries.is_empty() || mem_dir.exists() {
+                    std::fs::create_dir_all(&mem_dir).map_err(|e| AppError::Io(e.to_string()))?;
+                    let idx_path = mem_dir.join("MEMORY.md");
+                    std::fs::write(&idx_path, markdown::build_memory_index(&entries))
+                        .map_err(|e| AppError::Io(e.to_string()))?;
+                    written.push(idx_path.to_string_lossy().to_string());
+
+                    // 對帳清理：刪「不在權威集」的孤兒記憶檔，使「sync = vault 完全對齊 queue」、孤兒自癒。
+                    // mem_dir 已確認安全；再以「命名格式 + 一般檔」雙保險（agent/memory 為受管目錄，
+                    // 符合記憶命名格式之 .md 視為受管檔）；保留 MEMORY.md，不跟隨 symlink、不碰目錄。
+                    let expected: std::collections::HashSet<&str> =
+                        entries.iter().map(|e| e.0.as_str()).collect();
+                    if let Ok(rd) = std::fs::read_dir(&mem_dir) {
+                        for ent in rd.flatten() {
+                            let fname = ent.file_name();
+                            let fname = fname.to_string_lossy();
+                            if fname == "MEMORY.md" || !looks_like_memory_file(&fname) {
+                                continue;
+                            }
+                            if expected.contains(fname.as_ref()) {
+                                continue;
+                            }
+                            let is_regular = std::fs::symlink_metadata(ent.path())
+                                .map(|m| m.file_type().is_file())
+                                .unwrap_or(false);
+                            if is_regular && std::fs::remove_file(ent.path()).is_ok() {
+                                written.push(format!("(清理孤兒) {}", ent.path().to_string_lossy()));
+                            }
+                        }
+                    }
+                }
+
+                // 專案 AGENTS/CLAUDE：與「有無記憶」解耦（空→「（尚無）」），只在安全閘通過後才寫，
+                // 避免在 vault 記憶未實際寫入時還內聯指向不存在的記憶（Codex r7 高）。
+                let agents_path = Path::new(project_path).join("AGENTS.md");
+                let claude_path = Path::new(project_path).join("CLAUDE.md");
+                if !entries.is_empty() || agents_path.exists() || claude_path.exists() {
+                    let bullets = markdown::memory_bullets(&entries);
+                    markdown::write_with_backup(&agents_path, &markdown::build_agents_md(&vault_folder, &bullets))?;
+                    written.push(agents_path.to_string_lossy().to_string());
+                    markdown::write_with_backup(&claude_path, &markdown::build_claude_md(Some(&vault_folder), &bullets))?;
+                    written.push(claude_path.to_string_lossy().to_string());
+                }
+            }
+        }
     }
 
     // ── 全域 scope 記憶：Phase 3a 暫不處理（Codex 高風險 #2）──
@@ -164,44 +291,56 @@ pub fn preview_sync_diff(
         .map(|s| s.to_string())
         .unwrap_or_else(|| project_vault_folder(project_path));
 
-    // 專案記憶 → vault：預覽 AGENTS.md 純指標 + 每筆 vault 記憶檔 + MEMORY.md 索引（Codex #4）。
+    // 專案記憶 → vault 預覽。鏡像 sync 的條件（Codex r2 中 #2）：vault 已設即進入，
+    // 即使 project_mem 空也預覽「空索引清理/指針重寫」，避免「預覽無變更、執行卻改檔」。
     let project_mem: Vec<&ReviewItem> = all_project_memory.iter()
         .filter(|i| i.item_type == ReviewItemType::Memory && i.sync_scope == SyncScope::Project)
         .collect();
-    if let (Some(vroot), false) = (vault_root, project_mem.is_empty()) {
-        let mem_dir = vroot.join(&vault_folder).join("agent").join("memory");
-        let agents_path = Path::new(project_path).join("AGENTS.md");
-        previews.push(FileDiffPreview {
-            current_content: std::fs::read_to_string(&agents_path).ok(),
-            new_content: markdown::build_agents_md(&vault_folder),
-            is_new_file: !agents_path.exists(),
-            file_path: agents_path.to_string_lossy().to_string(),
-        });
-        // 與 sync 一致：CLAUDE.md 也改純指標（Codex 追審 #A）
-        let claude_path = Path::new(project_path).join("CLAUDE.md");
-        previews.push(FileDiffPreview {
-            current_content: std::fs::read_to_string(&claude_path).ok(),
-            new_content: markdown::build_claude_md(Some(&vault_folder)),
-            is_new_file: !claude_path.exists(),
-            file_path: claude_path.to_string_lossy().to_string(),
-        });
+    if let Some(vroot) = vault_root {
         let entries = memory_index_entries(&project_mem);
-        for (item, entry) in project_mem.iter().zip(&entries) {
-            let path = mem_dir.join(&entry.0);
-            previews.push(FileDiffPreview {
-                current_content: std::fs::read_to_string(&path).ok(),
-                new_content: markdown::build_memory_file(item),
-                is_new_file: !path.exists(),
-                file_path: path.to_string_lossy().to_string(),
-            });
+        // 與 sync 共用同一安全閘（Codex r7 中）：vault_folder/祖先不安全 → 不列 vault 記憶與專案 md diff，
+        // 避免 preview 顯示一組 sync 實際不會寫（或會 Err）的路徑，維持 preview/sync 一致。
+        if let Some(mem_dir) = safe_project_memory_dir(vroot, &vault_folder) {
+            let bullets = markdown::memory_bullets(&entries);
+
+            // AGENTS/CLAUDE：entries 非空、或檔已存在 → 會被重寫（空→「（尚無）」）
+            let agents_path = Path::new(project_path).join("AGENTS.md");
+            let claude_path = Path::new(project_path).join("CLAUDE.md");
+            if !entries.is_empty() || agents_path.exists() || claude_path.exists() {
+                previews.push(FileDiffPreview {
+                    current_content: std::fs::read_to_string(&agents_path).ok(),
+                    new_content: markdown::build_agents_md(&vault_folder, &bullets),
+                    is_new_file: !agents_path.exists(),
+                    file_path: agents_path.to_string_lossy().to_string(),
+                });
+                previews.push(FileDiffPreview {
+                    current_content: std::fs::read_to_string(&claude_path).ok(),
+                    new_content: markdown::build_claude_md(Some(&vault_folder), &bullets),
+                    is_new_file: !claude_path.exists(),
+                    file_path: claude_path.to_string_lossy().to_string(),
+                });
+            }
+            // 個別記憶檔：僅非空才寫
+            for (item, entry) in project_mem.iter().zip(&entries) {
+                let path = mem_dir.join(&entry.0);
+                previews.push(FileDiffPreview {
+                    current_content: std::fs::read_to_string(&path).ok(),
+                    new_content: markdown::build_memory_file(item),
+                    is_new_file: !path.exists(),
+                    file_path: path.to_string_lossy().to_string(),
+                });
+            }
+            // MEMORY.md 索引：entries 非空、或 mem_dir 已存在（清空重寫）→ 預覽
+            if !entries.is_empty() || mem_dir.exists() {
+                let idx_path = mem_dir.join("MEMORY.md");
+                previews.push(FileDiffPreview {
+                    current_content: std::fs::read_to_string(&idx_path).ok(),
+                    new_content: markdown::build_memory_index(&entries),
+                    is_new_file: !idx_path.exists(),
+                    file_path: idx_path.to_string_lossy().to_string(),
+                });
+            }
         }
-        let idx_path = mem_dir.join("MEMORY.md");
-        previews.push(FileDiffPreview {
-            current_content: std::fs::read_to_string(&idx_path).ok(),
-            new_content: markdown::build_memory_index(&entries),
-            is_new_file: !idx_path.exists(),
-            file_path: idx_path.to_string_lossy().to_string(),
-        });
     }
 
     // 技能 → vault `_skills`（Phase 3c·A）：preview 與 sync 共用 skill_dest_paths 算落點，確保一致。
@@ -244,7 +383,8 @@ fn sync_tier_memory(vault_root: &Path, memory: &[ReviewItem], scope: SyncScope, 
     let entries = memory_index_entries(&mems);
     for (item, entry) in mems.iter().zip(&entries) {
         let path = mem_dir.join(&entry.0);
-        markdown::write_with_backup(&path, &markdown::build_memory_file(item))?;
+        // 衍生檔（可由 queue 重建）→ 無備份寫入，避免 agent/memory 累積 .bak 雜物。
+        std::fs::write(&path, markdown::build_memory_file(item)).map_err(|e| AppError::Io(e.to_string()))?;
         written.push(path.to_string_lossy().to_string());
     }
     let idx_path = mem_dir.join("MEMORY.md");
@@ -310,10 +450,15 @@ pub fn promote_memory_to_shared(
     remaining_project_memory: &[ReviewItem],
     all_shared_memory: &[ReviewItem],
 ) -> Result<Vec<String>, AppError> {
-    // 1) 刪舊專案檔
-    let proj_mem_dir = vault_root.join(vault_folder).join("agent").join("memory");
+    // 安全閘（Codex r4 高）：promote 的刪檔路徑與 sync 共用同一道防線，杜絕 vault_folder 污染逃逸。
+    let proj_mem_dir = safe_project_memory_dir(vault_root, vault_folder)
+        .ok_or_else(|| AppError::InvalidPath(format!("不安全的 vault_folder，拒絕升級刪檔：{vault_folder}")))?;
+    // 1) 刪舊專案檔：限「檔名 == memory_filename(promoted) 的一般檔」（不跟隨 symlink、不誤刪）。
     let old_file = proj_mem_dir.join(memory_filename(promoted));
-    if old_file.is_file() {
+    let old_is_regular = std::fs::symlink_metadata(&old_file)
+        .map(|m| m.file_type().is_file())
+        .unwrap_or(false);
+    if old_is_regular {
         std::fs::remove_file(&old_file).map_err(|e| AppError::Io(e.to_string()))?;
     }
     // 以剩餘專案記憶重建該專案索引（孤兒清除）
@@ -379,6 +524,111 @@ mod tests {
             sync_targets: vec![], sync_scope: scope,
             source_pending_file: None, created_at: Utc::now(), reviewed_at: None,
         }
+    }
+
+    #[test]
+    fn test_sync_cleans_orphan_project_memory_but_spares_others() {
+        let root = std::env::temp_dir().join(format!("amagi-orphan-{}", uuid::Uuid::new_v4()));
+        let vault = root.join("vault");
+        let proj = root.join("proj");
+        std::fs::create_dir_all(&proj).unwrap();
+        let vf = "projects/p";
+        let mem_dir = vault.join(vf).join("agent").join("memory");
+        std::fs::create_dir_all(&mem_dir).unwrap();
+        // 植入：孤兒記憶檔(記憶格式 .md)、非 .md 檔、非記憶格式的 .md
+        std::fs::write(mem_dir.join("orphan-deadbeef.md"), "孤兒殘留").unwrap();
+        std::fs::write(mem_dir.join("keep.txt"), "非 md，不可動").unwrap();
+        std::fs::write(mem_dir.join("notes.md"), "手放筆記，非記憶格式，不可動").unwrap();
+
+        let m = mem("real1", "真記憶", SyncScope::Project);
+        sync_agent_files(proj.to_str().unwrap(), Some(vf), Some(&vault), &[], std::slice::from_ref(&m)).unwrap();
+
+        // 真記憶檔在、MEMORY.md 在
+        assert!(mem_dir.join(memory_filename(&m)).is_file(), "真記憶檔應寫入");
+        assert!(mem_dir.join("MEMORY.md").is_file(), "索引應重建");
+        // 記憶格式的孤兒被清
+        assert!(!mem_dir.join("orphan-deadbeef.md").exists(), "記憶格式孤兒應被對帳清理");
+        // 非 .md、非記憶格式 .md、MEMORY.md 不受影響
+        assert!(mem_dir.join("keep.txt").exists(), "非 .md 檔不可被刪");
+        assert!(mem_dir.join("notes.md").exists(), "非記憶格式 .md（手放）不可被刪");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_memory_hook_skips_frontmatter() {
+        // 有 description → 取之（不抓 frontmatter 的 --- / name:）
+        assert_eq!(
+            memory_hook("---\nname: x\ndescription: 自動刷新驗證暗號為「白鶴亮翅」\n---\n正文"),
+            "自動刷新驗證暗號為「白鶴亮翅」"
+        );
+        // 無 description → 取 frontmatter 後第一行正文（跳過標題）
+        assert_eq!(memory_hook("---\nname: y\n---\n# 標題\n這是正文"), "這是正文");
+        // 無 frontmatter → 第一行非空
+        assert_eq!(memory_hook("直接正文\n第二行"), "直接正文");
+        // 絕不回 ---
+        assert_ne!(memory_hook("---\nname: z\n---\n內容"), "---");
+        // 未閉合 frontmatter（無第二個 ---、無 description）→ 不回 ---（保守回空）
+        assert_eq!(memory_hook("---\nname: noclose\nfoo: bar"), "");
+        // CJK 超過 40 字 → 截斷加 …，且不切壞字元
+        let long = "啊".repeat(50);
+        let h = memory_hook(&long);
+        assert_eq!(h.chars().count(), 41); // 40 + …
+        assert!(h.ends_with('…'));
+    }
+
+    #[test]
+    fn test_sync_unsafe_vault_folder_errs_not_silent() {
+        // hard gate（Codex r7 高）：不安全 vault_folder + 有專案記憶 → 必須 Err，
+        // 不可靜默跳過 vault 寫入卻讓外層 mark_synced。
+        let root = std::env::temp_dir().join(format!("amagi-hardgate-{}", uuid::Uuid::new_v4()));
+        let vault = root.join("vault");
+        let proj = root.join("proj");
+        std::fs::create_dir_all(&vault).unwrap();
+        std::fs::create_dir_all(&proj).unwrap();
+        let m = mem("hg1", "記憶", SyncScope::Project);
+        let r = sync_agent_files(proj.to_str().unwrap(), Some("../escape"), Some(&vault), &[], std::slice::from_ref(&m));
+        assert!(r.is_err(), "不安全 vault_folder + 有專案記憶 應回 Err");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_safe_dir_and_promote_reject_unsafe_vault_folder() {
+        let root = std::env::temp_dir().join(format!("amagi-safedir-{}", uuid::Uuid::new_v4()));
+        let vault = root.join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        // 安全 → Some
+        assert!(safe_project_memory_dir(&vault, "projects/p").is_some());
+        // 首次建立：vault_root 尚不存在但 parent 存在 → 仍放行（祖先可解析、folder 乾淨）
+        let fresh_root = root.join("fresh-vault");
+        assert!(safe_project_memory_dir(&fresh_root, "projects/p").is_some(),
+            "首次建立 vault 應放行");
+        // 不安全 → None（擋逃逸）
+        assert!(safe_project_memory_dir(&vault, "../escape").is_none());
+        assert!(safe_project_memory_dir(&vault, "projects/../../etc").is_none());
+        assert!(safe_project_memory_dir(&vault, "general").is_none());
+        // promote 遇不安全 vault_folder → Err（拒絕刪檔，不逃逸）
+        let m = mem("x", "t", SyncScope::Shared);
+        let r = promote_memory_to_shared(&vault, "../escape", &m, &[], std::slice::from_ref(&m));
+        assert!(r.is_err(), "不安全 vault_folder 應拒絕升級刪檔");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_orphan_cleanup_safety_helpers() {
+        // vault_folder 驗證：擋逃逸
+        assert!(is_safe_project_vault_folder("projects/foo"));
+        assert!(!is_safe_project_vault_folder("../evil"));
+        assert!(!is_safe_project_vault_folder("projects/../../etc"));
+        assert!(!is_safe_project_vault_folder("general")); // 首段非 projects
+        assert!(!is_safe_project_vault_folder(""));
+        // 記憶檔命名格式
+        assert!(looks_like_memory_file("title-abc12345.md"));
+        assert!(looks_like_memory_file("a-b-c-deadbeef.md")); // slug 含 -，看最後段
+        assert!(!looks_like_memory_file("notes.md"));         // 無 - 後綴
+        assert!(!looks_like_memory_file("MEMORY.md"));
+        assert!(!looks_like_memory_file("foo-toolongsuffix.md")); // 後綴 >8
+        assert!(!looks_like_memory_file("foo-.md"));          // 空後綴
     }
 
     #[test]

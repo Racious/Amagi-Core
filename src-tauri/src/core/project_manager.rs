@@ -387,7 +387,8 @@ const AFTER_TASK_REVIEW_TEMPLATE: &str = r#"# After Task Review（任務完成�
 "#;
 
 fn build_initial_agents_md(project_name: &str, vault_folder: &str) -> String {
-    let pointer = crate::utils::markdown::build_vault_pointer_block(vault_folder, true);
+    // init 當下專案尚無記憶，索引留空（顯示「（尚無）」）；之後 sync 會內聯實際索引。
+    let pointer = crate::utils::markdown::build_vault_pointer_block(vault_folder, true, "");
     format!(r#"# {project_name} — Agent 工作記憶
 
 > 由 AMAGI Core 自動建立。本檔案記錄此專案的規則、技術棧與注意事項。
@@ -450,7 +451,8 @@ scope: project
 }
 
 fn build_initial_claude_md(project_name: &str, vault_folder: &str) -> String {
-    let pointer = crate::utils::markdown::build_vault_pointer_block(vault_folder, false);
+    // init 當下專案尚無記憶，索引留空；之後 sync 會內聯實際索引。
+    let pointer = crate::utils::markdown::build_vault_pointer_block(vault_folder, false, "");
     format!(r#"# {project_name} — Claude 工作規則
 
 > 由 AMAGI Core 自動建立。本檔案記錄 Claude 在此專案應遵守的規則。

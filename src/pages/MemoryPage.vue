@@ -93,7 +93,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { api, type ReviewItem, type SyncScope } from '../api/tauriCommands'
 import { useReviewStore } from '../stores/reviewStore'
 import { useProjectStore } from '../stores/projectStore'
@@ -101,6 +101,14 @@ import { useProjectStore } from '../stores/projectStore'
 // 讀 store 快取（App 啟動已 fetch），切頁無殘影、零新後端。
 const reviewStore = useReviewStore()
 const projectStore = useProjectStore()
+
+// 進頁刷新：reviewStore 於 App 啟動載入，期間若做過同步/升級會過時 → 進記憶庫頁時刷新，
+// 確保剛同步/升級的記憶即時反映（已有快取，故不閃，只是更新）。
+// fetchItems 內部自行 catch（失敗時保留既有 items 快取、設 reviewStore.error → 頁面顯示提示），
+// 故此處不需再 catch；用 void 表明刻意不等待。
+onMounted(() => {
+  void reviewStore.fetchItems()
+})
 
 const lens = ref<string>('all') // 'all' | 'shared' | 'global' | <projectId>
 const query = ref('')

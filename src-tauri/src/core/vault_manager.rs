@@ -115,10 +115,67 @@ pub fn set_vault_path(path: &str, data_dir: &Path) -> Result<VaultSetResult, App
     })
 }
 
+/// 讀某層記憶索引（`<tier>/agent/memory/MEMORY.md`）的條目行（以 `-` 開頭者），
+/// 供內聯進錨點。回傳 None＝該層尚無索引或無條目。
+/// 只取條目行（去掉索引檔自身的標題／引言），內聯版面乾淨。
+fn read_tier_memory_entries(vault_path: &str, tier: &str) -> Option<String> {
+    let p = Path::new(vault_path)
+        .join(tier).join("agent").join("memory").join("MEMORY.md");
+    let content = std::fs::read_to_string(&p).ok()?;
+    // 防衛縱深：內聯進全域錨點前中和 HTML comment delimiters，
+    // 杜絕 MEMORY.md（可能被手改/舊資料）含 `<!-- AMAGI-VAULT:END -->` 假標記破壞 splice 邊界。
+    let entries: Vec<String> = content
+        .lines()
+        .map(|l| l.trim_end())
+        .filter(|l| l.trim_start().starts_with('-'))
+        .map(|l| l.replace("<!--", "<! --").replace("-->", "-- >"))
+        .collect();
+    if entries.is_empty() { None } else { Some(entries.join("\n")) }
+}
+
+/// 全域錨點受管區塊：**內聯** general／shared 記憶索引（非僅指標）。
+/// 實測顯示薄指標不會被主動跟讀；內聯到「必讀的 CLAUDE.md／AGENTS.md」最可靠。
+/// 索引隨 set_vault_path（及日後 sync 刷新）以當下 vault 內容重建。
 fn build_pointer_block(vault_path: &str) -> String {
-    format!(
-        "{BEGIN_MARKER}\n# Amagi-Vault 知識庫\n路徑：{vault_path}\n對話開始時讀取該路徑 index.md 與最近 3 份 daily/，規則依該路徑 CLAUDE.md。\n全域/共用記憶見 general/agent/memory/ 與 shared/agent/memory/（先讀其 MEMORY.md 速查，需要時再讀個別記憶檔）。\n{END_MARKER}"
-    )
+    let general = read_tier_memory_entries(vault_path, "general");
+    let shared = read_tier_memory_entries(vault_path, "shared");
+    let mut s = String::new();
+    s.push_str(BEGIN_MARKER);
+    s.push_str("\n# Amagi-Vault 知識庫\n");
+    s.push_str(&format!("路徑：{vault_path}\n"));
+    s.push_str("對話開始時讀取該路徑 index.md 與最近 3 份 daily/，規則依該路徑 CLAUDE.md。\n\n");
+    s.push_str("## 記憶速查（以下索引已內聯，開場即視為已知；需細節再讀對應 `<層>/agent/memory/<檔>`）\n\n");
+    s.push_str("### 全域記憶（general，每次對話都適用）\n");
+    match &general {
+        Some(e) => { s.push_str(e); s.push('\n'); }
+        None => s.push_str("（尚無）\n"),
+    }
+    s.push_str("\n### 共用記憶（shared，跨專案）\n");
+    match &shared {
+        Some(e) => { s.push_str(e); s.push('\n'); }
+        None => s.push_str("（尚無）\n"),
+    }
+    s.push_str("\n> 當前專案的記憶索引另見該專案的 CLAUDE.md／AGENTS.md。\n");
+    s.push_str(END_MARKER);
+    s
+}
+
+/// 以當下 vault 記憶內容，重寫全域錨點受管區塊（~/.claude/CLAUDE.md、~/.codex/AGENTS.md）。
+/// 供 sync 後呼叫，使內聯的 general／shared 索引自動跟上最新，不必手動重設 vault。
+/// 未設 vault → 無動作（Ok）。
+pub fn refresh_global_anchor(data_dir: &Path) -> Result<(), AppError> {
+    let vault_path = match get_vault_config(data_dir).vault_path {
+        Some(v) => v,
+        None => return Ok(()),
+    };
+    let block = build_pointer_block(&vault_path);
+    if let Some(claude_md) = fs_utils::global_claude_md_path() {
+        write_managed_block(&claude_md, &block)?;
+    }
+    if let Some(codex_agents) = fs_utils::global_codex_agents_md_path() {
+        write_managed_block(&codex_agents, &block)?;
+    }
+    Ok(())
 }
 
 /// 將受管區塊寫入目標檔，先備份 .bak。
