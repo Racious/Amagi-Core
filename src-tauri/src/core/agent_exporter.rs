@@ -217,7 +217,22 @@ pub fn sync_agent_files(
                     // 符合記憶命名格式之 .md 視為受管檔）；保留 MEMORY.md，不跟隨 symlink、不碰目錄。
                     let expected: std::collections::HashSet<&str> =
                         entries.iter().map(|e| e.0.as_str()).collect();
-                    if let Ok(rd) = std::fs::read_dir(&mem_dir) {
+                    // TOCTOU 輕量強化（Codex 稽核中）：安全閘驗過 mem_dir 後到此刪除迴圈之間，
+                    // 目錄仍可能被本機競態替換為 symlink/junction。刪前重新 canonicalize：
+                    // ① mem_dir 本身仍須落在 vault 根下；② 每個待刪檔的 canonical 父目錄須等於
+                    // canonical mem_dir。任一校驗失敗 → 回報 warning（非靜默略過），絕不在校驗外刪檔。
+                    let canon_mem = std::fs::canonicalize(&mem_dir).ok();
+                    let mem_within_vault = match (vroot.canonicalize().ok(), canon_mem.as_ref()) {
+                        (Some(vr), Some(md)) => md.starts_with(&vr),
+                        _ => false,
+                    };
+                    if !mem_within_vault {
+                        written.push(format!(
+                            "(略過孤兒清理：記憶目錄 canonical 校驗失敗，疑似 symlink/競態) {}",
+                            mem_dir.to_string_lossy()
+                        ));
+                    } else if let Ok(rd) = std::fs::read_dir(&mem_dir) {
+                        let canon_mem = canon_mem.unwrap(); // mem_within_vault 為真 → 必為 Some
                         for ent in rd.flatten() {
                             let fname = ent.file_name();
                             let fname = fname.to_string_lossy();
@@ -230,7 +245,24 @@ pub fn sync_agent_files(
                             let is_regular = std::fs::symlink_metadata(ent.path())
                                 .map(|m| m.file_type().is_file())
                                 .unwrap_or(false);
-                            if is_regular && std::fs::remove_file(ent.path()).is_ok() {
+                            if !is_regular {
+                                continue;
+                            }
+                            // 刪前重驗：該檔 canonical 父目錄須正好是 canonical mem_dir。
+                            let parent_ok = std::fs::canonicalize(ent.path())
+                                .ok()
+                                .as_deref()
+                                .and_then(Path::parent)
+                                .map(|p| p == canon_mem.as_path())
+                                .unwrap_or(false);
+                            if !parent_ok {
+                                written.push(format!(
+                                    "(略過清理：路徑校驗失敗，疑似 symlink/競態) {}",
+                                    ent.path().to_string_lossy()
+                                ));
+                                continue;
+                            }
+                            if std::fs::remove_file(ent.path()).is_ok() {
                                 written.push(format!("(清理孤兒) {}", ent.path().to_string_lossy()));
                             }
                         }

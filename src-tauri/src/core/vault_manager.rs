@@ -169,6 +169,18 @@ pub fn refresh_global_anchor(data_dir: &Path) -> Result<(), AppError> {
         None => return Ok(()),
     };
     let block = build_pointer_block(&vault_path);
+    // 縱深：block 內聯了 general/shared 的 MEMORY.md 條目（可能來自舊資料或手改），
+    // 內聯前再過一次 safety_filter——杜絕既有 MEMORY.md 的裸 token 被擴散進全域錨點
+    // （~/.claude、~/.codex）。命中則 fail-soft：不刷新錨點、回 Err 供 sync 轉成 warning，
+    // 不阻斷記憶已落 vault（Codex 稽核低）。
+    let safety = safety_filter::check(&block);
+    if !safety.is_safe {
+        let labels: Vec<String> = safety.hits.iter().map(|h| h.label.clone()).collect();
+        return Err(AppError::SafetyBlocked(format!(
+            "全域錨點刷新偵測到疑似敏感內容（{}），已略過刷新以免擴散到 ~/.claude／~/.codex；請檢查 general／shared 的 MEMORY.md。",
+            labels.join("、")
+        )));
+    }
     if let Some(claude_md) = fs_utils::global_claude_md_path() {
         write_managed_block(&claude_md, &block)?;
     }

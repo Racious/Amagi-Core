@@ -93,7 +93,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, watch, onMounted } from 'vue'
 import { api, type ReviewItem, type SyncScope } from '../api/tauriCommands'
 import { useReviewStore } from '../stores/reviewStore'
 import { useProjectStore } from '../stores/projectStore'
@@ -129,6 +129,16 @@ function projectName(id: string): string {
 const projectsWithMemory = computed(() => {
   const ids = new Set(memories.value.filter(m => m.syncScope === 'project').map(m => m.projectId))
   return projectStore.projects.filter(p => ids.has(p.id))
+})
+
+// 透鏡失效守衛（F1）：升級/同步後，某專案可能不再有專案記憶 → 其選項從下拉移除，
+// 但 lens 仍卡在該 projectId（select 顯示空白、列表「找不到」）。偵測到 lens 指向已消失的
+// 專案選項 → 退回「全部」，比照 SkillsPage load() 對消失目標退回全域的作法。
+watch(projectsWithMemory, (projects) => {
+  const fixed = new Set(['all', 'shared', 'global'])
+  if (!fixed.has(lens.value) && !projects.some(p => p.id === lens.value)) {
+    lens.value = 'all'
+  }
 })
 
 const counts = computed(() => {

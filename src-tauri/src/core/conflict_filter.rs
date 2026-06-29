@@ -25,20 +25,22 @@ static CONFLICT_PATTERNS: Lazy<Vec<(Regex, &'static str)>> = Lazy::new(|| {
             "全域規則禁止加 Co-Authored-By 行",
         ),
         // ── 危險 git 操作 ─────────────────────────────────
+        // 旗標可出現在子命令後任意位置（如 `git push origin main --force`、`git -c k=v reset --hard`），
+        // 故以「git … <子命令> … <危險旗標>」的寬鬆比對，避免「旗標緊接子命令」才命中的破口（Codex 稽核低）。
         (
             Regex::new(r"(?i)--no-verify").unwrap(),
             "危險：--no-verify 會跳過 git hook 檢查",
         ),
         (
-            Regex::new(r"(?i)git\s+push\s+(--force|-f)(\s|$)").unwrap(),
-            "危險：git push --force 強制覆寫遠端歷史",
+            Regex::new(r"(?i)\bgit\b[^\n]*\bpush\b[^\n]*\s(--force(-with-lease)?|-f)(\s|$|=)").unwrap(),
+            "危險：git push --force/--force-with-lease 強制覆寫遠端歷史",
         ),
         (
-            Regex::new(r"(?i)git\s+reset\s+--hard").unwrap(),
+            Regex::new(r"(?i)\bgit\b[^\n]*\breset\b[^\n]*--hard\b").unwrap(),
             "危險：git reset --hard 會丟棄未提交變更",
         ),
         (
-            Regex::new(r"(?i)git\s+clean\s+-[a-z]*f").unwrap(),
+            Regex::new(r"(?i)\bgit\b[^\n]*\bclean\b[^\n]*\s-[a-z]*f").unwrap(),
             "危險：git clean -f 會刪除未追蹤檔案",
         ),
     ]
@@ -113,6 +115,16 @@ mod tests {
         assert!(check("git reset --hard HEAD~3").has_conflict);
         assert!(check("git clean -fd").has_conflict);
         assert!(check("git commit --no-verify -m x").has_conflict);
+    }
+
+    /// 危險旗標出現在子命令後任意位置也須命中（Codex 稽核低：原 regex 只抓緊接子命令的形式）
+    #[test]
+    fn test_detects_dangerous_git_flags_after_args() {
+        assert!(check("git push origin main --force").has_conflict);
+        assert!(check("git push origin --force-with-lease").has_conflict);
+        assert!(check("git -c core.sshCommand=x push --force").has_conflict);
+        assert!(check("git -c k=v reset --hard").has_conflict);
+        assert!(check("git push -f origin").has_conflict);
     }
 
     /// 正確做法不該被誤判

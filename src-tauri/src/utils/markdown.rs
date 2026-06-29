@@ -59,7 +59,8 @@ pub fn build_claude_md(vault_folder: Option<&str>, memory_bullets: &str) -> Stri
 
 /// 單筆記憶檔（vault `agent/memory/<slug>.md`）：frontmatter + 內文。
 pub fn build_memory_file(item: &ReviewItem) -> String {
-    let created = item.created_at.format("%Y-%m-%d");
+    // 顯示用日期取本地時區（created_at 以 UTC 儲存）：避免台北凌晨換算回 UTC 差一天（F3）。
+    let created = item.created_at.with_timezone(&chrono::Local).format("%Y-%m-%d");
     let mut s = String::from("---\n");
     s.push_str(&format!("title: \"{}\"\n", yaml_escape(&item.title)));
     s.push_str(&format!("category: {}\n", item.category));

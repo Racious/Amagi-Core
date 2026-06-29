@@ -1,5 +1,4 @@
 use std::path::Path;
-use chrono::Utc;
 use crate::AppError;
 use crate::models::review::ReviewItem;
 use crate::utils::fs_utils;
@@ -75,7 +74,8 @@ pub fn write_wiki_pages(vault_root: &Path, items: &[ReviewItem]) -> Result<WikiW
 /// 組正式頁面 Markdown（含 frontmatter）。
 pub fn build_wiki_md(item: &ReviewItem, category: &str) -> String {
     let id = format!("wiki-{}", &uuid::Uuid::new_v4().to_string()[..8]);
-    let date = Utc::now().format("%Y-%m-%d");
+    // 顯示用日期取本地時區：避免台北凌晨以 UTC 計算差一天（F3）。
+    let date = chrono::Local::now().format("%Y-%m-%d");
     // 若萃取自原始來源，frontmatter 回指出處（adr-002 D9）
     let source_line = match &item.source_pending_file {
         Some(s) if !s.is_empty() => format!("source: {s}\n"),
