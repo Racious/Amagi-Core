@@ -17,7 +17,7 @@ export const useSkillStore = defineStore('skill', () => {
       library.value = await api.listLibrarySkills()
       loaded.value = true
     } catch (e) {
-      error.value = String(e)
+      error.value = (e as any)?.message ?? String(e)
       throw e
     }
   }

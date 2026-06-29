@@ -243,7 +243,7 @@ async function loadWorkflows() {
   try {
     allProjectWorkflows.value = await api.listAllWorkflows()
   } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : String(e)
+    error.value = (e as any)?.message ?? String(e)
   } finally {
     loading.value = false
   }
@@ -303,7 +303,7 @@ async function generate() {
       selectedMode.value,
     )
   } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : String(e)
+    error.value = (e as any)?.message ?? String(e)
   } finally {
     generating.value = false
   }

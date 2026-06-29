@@ -173,7 +173,7 @@ async function loadRun() {
     // 只有進行中的才顯示為 active；已完成的也顯示（讓使用者看到結果）
     activeRun.value = run && run.status !== 'cancelled' ? run : null
   } catch (e) {
-    error.value = String(e)
+    error.value = (e as any)?.message ?? String(e)
   }
 }
 
@@ -184,7 +184,7 @@ async function startRun() {
   try {
     activeRun.value = await api.startBridgeRun(selectedId.value, chosenWorkflow.value, taskInput.value.trim())
   } catch (e) {
-    error.value = String(e)
+    error.value = (e as any)?.message ?? String(e)
   } finally {
     busy.value = false
   }
@@ -197,7 +197,7 @@ async function advance() {
   try {
     activeRun.value = await api.advanceBridgeRun(selectedId.value)
   } catch (e) {
-    error.value = String(e)
+    error.value = (e as any)?.message ?? String(e)
   } finally {
     busy.value = false
   }
@@ -210,7 +210,7 @@ async function cancelRun() {
     await api.cancelBridgeRun(selectedId.value)
     activeRun.value = null
   } catch (e) {
-    error.value = String(e)
+    error.value = (e as any)?.message ?? String(e)
   } finally {
     busy.value = false
   }

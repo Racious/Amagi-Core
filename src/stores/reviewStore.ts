@@ -17,7 +17,7 @@ export const useReviewStore = defineStore('review', () => {
     try {
       items.value = await api.listReviewItems(projectId)
     } catch (e) {
-      error.value = String(e)
+      error.value = (e as any)?.message ?? String(e)
     } finally {
       loading.value = false
     }
@@ -33,7 +33,7 @@ export const useReviewStore = defineStore('review', () => {
       )
       return result
     } catch (e) {
-      error.value = String(e)
+      error.value = (e as any)?.message ?? String(e)
       throw e
     } finally {
       loading.value = false
@@ -49,7 +49,7 @@ export const useReviewStore = defineStore('review', () => {
         ids.includes(item.id) ? { ...item, status: 'ignored' as const } : item
       )
     } catch (e) {
-      error.value = String(e)
+      error.value = (e as any)?.message ?? String(e)
       throw e
     } finally {
       loading.value = false
@@ -65,7 +65,7 @@ export const useReviewStore = defineStore('review', () => {
       if (idx !== -1) items.value[idx] = updated
       return updated
     } catch (e) {
-      error.value = String(e)
+      error.value = (e as any)?.message ?? String(e)
       throw e
     } finally {
       loading.value = false

@@ -17,7 +17,7 @@ export const useProjectStore = defineStore('project', () => {
     try {
       projects.value = await api.listProjects()
     } catch (e) {
-      error.value = String(e)
+      error.value = (e as any)?.message ?? String(e)
     } finally {
       loading.value = false
     }
@@ -31,7 +31,7 @@ export const useProjectStore = defineStore('project', () => {
       projects.value.push(info)
       return info
     } catch (e) {
-      error.value = String(e)
+      error.value = (e as any)?.message ?? String(e)
       throw e
     } finally {
       loading.value = false
@@ -46,7 +46,7 @@ export const useProjectStore = defineStore('project', () => {
       await fetchProjects()
       return result
     } catch (e) {
-      error.value = String(e)
+      error.value = (e as any)?.message ?? String(e)
       throw e
     } finally {
       loading.value = false
@@ -61,7 +61,7 @@ export const useProjectStore = defineStore('project', () => {
       projects.value = projects.value.filter(p => p.id !== projectId)
       if (selectedProjectId.value === projectId) selectedProjectId.value = null
     } catch (e) {
-      error.value = String(e)
+      error.value = (e as any)?.message ?? String(e)
       throw e
     } finally {
       loading.value = false
@@ -75,7 +75,7 @@ export const useProjectStore = defineStore('project', () => {
       lastScan.value = await api.scanProject(projectId)
       return lastScan.value
     } catch (e) {
-      error.value = String(e)
+      error.value = (e as any)?.message ?? String(e)
       throw e
     } finally {
       loading.value = false
