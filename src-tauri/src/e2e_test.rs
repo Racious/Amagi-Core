@@ -153,8 +153,9 @@ fn e2e_add_and_init_project() {
         assert!(sb.exists(f), "缺少檔案 {}", f);
     }
 
-    // 初始 AGENTS.md / CLAUDE.md 應含「自我分步」紀律
-    assert!(sb.read("AGENTS.md").contains("自我分步"));
+    // 初始 AGENTS.md 應帶「開發工作流薄錨」（doctrine 全文在全域，此處宣告遵循＋指向軌跡檔）
+    assert!(sb.read("AGENTS.md").contains("開發工作流"), "AGENTS.md 缺工作流薄錨");
+    assert!(sb.read("AGENTS.md").contains(".amagi/workflow-state.md"), "AGENTS.md 薄錨應指向軌跡檔");
 
     // keystone：init 產出的 agent 檔應帶 vault 知識庫指針（Layer 2，路徑無關）
     let agents_init = sb.read("AGENTS.md");
@@ -169,7 +170,7 @@ fn e2e_add_and_init_project() {
     let gi = sb.read(".gitignore");
     assert!(gi.contains(".amagi/") && gi.contains(".codex/skills/") && gi.contains(".claude/skills/"),
         "init 應補 .gitignore 派生物規則");
-    assert!(sb.read("CLAUDE.md").contains("不可跳步"));
+    assert!(sb.read("CLAUDE.md").contains(".amagi/workflow-state.md"), "CLAUDE.md 薄錨應指向軌跡檔");
 
     // 冪等：再 init 一次不該爆，且不重複建立既有檔
     let second = project_manager::init_project(&project).unwrap();

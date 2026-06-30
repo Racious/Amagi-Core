@@ -127,7 +127,7 @@ pub fn init_project(project: &Project) -> Result<InitResult, AppError> {
         .unwrap_or_else(|| crate::core::agent_exporter::project_vault_folder(&project.path));
     let agents_md = Path::new(&project.path).join("AGENTS.md");
     if !agents_md.exists() {
-        std::fs::write(&agents_md, build_initial_agents_md(&project.name, &vault_folder))
+        std::fs::write(&agents_md, crate::utils::markdown::build_agents_md(&vault_folder, ""))
             .map_err(|e| AppError::Io(e.to_string()))?;
         created_files.push(agents_md.to_string_lossy().to_string());
     }
@@ -135,7 +135,7 @@ pub fn init_project(project: &Project) -> Result<InitResult, AppError> {
     // ── 寫入 CLAUDE.md（含技能記錄規範）─────────────
     let claude_md = Path::new(&project.path).join("CLAUDE.md");
     if !claude_md.exists() {
-        std::fs::write(&claude_md, build_initial_claude_md(&project.name, &vault_folder))
+        std::fs::write(&claude_md, crate::utils::markdown::build_claude_md(Some(&vault_folder), ""))
             .map_err(|e| AppError::Io(e.to_string()))?;
         created_files.push(claude_md.to_string_lossy().to_string());
     }
@@ -329,8 +329,8 @@ scope: project
 
 const WORKFLOW_STATE_TEMPLATE: &str = r#"# Workflow State
 
-> 任務進行中的狀態檔。接到非簡單任務時，由 AI 更新此檔；
-> 完成並 commit 後可清空回到此初始狀態。
+> 任務進行中的軌跡檔。接到非簡單任務時，先在此列「計畫步驟」，逐步執行、每步寫「步驟結果」
+> （不跳步、不併步、寫完該步才前進）。完成並 commit 後歸檔 `.amagi/history/`、本檔重置。
 
 ## Current Task
 （無進行中的任務）
@@ -338,24 +338,23 @@ const WORKFLOW_STATE_TEMPLATE: &str = r#"# Workflow State
 ## Workflow Type
 （feature-dev / bug-fix / quick-task / commit-pr）
 
-## Current Step
-（目前進行到哪一步）
+## 計畫步驟（分析後列出，不跳步不併步；完成打勾）
+- [ ] 1. 分析：拆問題、查現況、定位檔案與風險
+- [ ] 2. 制訂計畫（複雜時待老爺核可）
+- [ ] 3. 實作（逐步，每步補下方「步驟結果」）
+- [ ] 4. 自我驗證（build / test 綠燈；完成＝有客觀證據）
+- [ ] 4.5 交叉審查（實質程式碼變更：交另一方 AI 審，含完成度稽核）
+- [ ] 5. after-task-review（依 after-task-review.md 回顧）
+- [ ] 6. commit 預覽（待老爺確認才 commit）
 
-## Completed Steps
-- [ ] classify-task（任務分類）
-- [ ] search-existing-code（搜尋既有程式碼）
-- [ ] check-skill（查閱 .claude/commands/ 是否有規範）
-- [ ] create-skill-draft（建立 .amagi/pending/ 技能草稿）
-- [ ] implement（實作）
-- [ ] verify（build / test 驗證）
-- [ ] after-task-review（依 after-task-review.md 回顧）
-- [ ] commit-check（詢問是否 commit）
+## 步驟結果（逐步追加，寫完一步才前進；證據＝改了哪些檔／build·test 結果）
+### 步驟 N：<步驟名>
+- 做了什麼：
+- 改了哪些檔／產出：
+- build·test 結果（證據）：
 
 ## Blockers
 （卡住的原因，無則留空）
-
-## Artifacts
-（本次任務產出的檔案，例如 .amagi/artifacts/xxx.md）
 
 ## Next Step
 （下一步要做什麼）
@@ -387,133 +386,9 @@ const AFTER_TASK_REVIEW_TEMPLATE: &str = r#"# After Task Review（任務完成�
 - **詢問老爺是否 commit（確認前不得自行 commit）**
 "#;
 
-fn build_initial_agents_md(project_name: &str, vault_folder: &str) -> String {
-    // init 當下專案尚無記憶，索引留空（顯示「（尚無）」）；之後 sync 會內聯實際索引。
-    let pointer = crate::utils::markdown::build_vault_pointer_block(vault_folder, true, "");
-    format!(r#"# {project_name} — Agent 工作記憶
-
-> 由 AMAGI Core 自動建立。本檔案記錄此專案的規則、技術棧與注意事項。
-
-{pointer}
-
-## 執行方式：自我分步 + 留下軌跡（重要）
-
-接到任何任務，先做以下事，再開始動工：
-
-1. **拆步驟**：把任務拆成數個明確步驟，先在 `.amagi/state/step-results.md` 寫出「步驟清單」。
-2. **逐步執行**：一次只做一步。
-3. **每步寫 result**：每完成一步，立刻在 `.amagi/state/step-results.md` 追加一段：
-   ```
-   ## 步驟 N：<步驟名>
-   - 做了什麼
-   - 產出/修改的檔案
-   - 結果
-   ```
-4. **寫完才前進**：該步的 result 寫好，才能做下一步。
-5. **不可跳步、不可合併步驟。**
-
-> 這份逐步軌跡讓使用者事後能完整看到你每一步怎麼走的。
-
----
-
-## 標準步驟（拆步驟時務必包含這些）
-
-1. **確認可用技能**：相關技能會自動載入（原生 Skills，位於 `.claude/skills/`）。有對應技能 → 照它做；無 → 按工程判斷。
-2. **實作功能**。
-3. **驗證**：跑 build / test，確認沒錯。
-4. **建立 skill 草稿**：在 `.amagi/pending/` 建 `skill-<任務類型>.md`，記錄這次的可重複流程（格式見下）。
-5. **詢問是否 commit**：向使用者報告，⛔ **使用者確認前不得自行執行 git commit**。
-
-### skill 草稿格式
-```
----
-title: 簡短描述這個技能
-scope: project
----
-
-## 描述
-這個技能解決什麼問題、適用於什麼情境。
-
-## 何時使用
-列出會用到這個技能的情境或觸發關鍵字（例：新增 API、四則運算）。
-這段讓未來的 AI 知道何時該套用此技能，請務必填寫。
-
-## 步驟
-1. ...
-
-## 注意事項
-- 常見錯誤或陷阱
-```
-
----
-
-<!-- AMAGI 會在這裡自動插入審核通過的記憶與規則 -->
-"#, project_name = project_name, pointer = pointer)
-}
-
-fn build_initial_claude_md(project_name: &str, vault_folder: &str) -> String {
-    // init 當下專案尚無記憶，索引留空；之後 sync 會內聯實際索引。
-    let pointer = crate::utils::markdown::build_vault_pointer_block(vault_folder, false, "");
-    format!(r#"# {project_name} — Claude 工作規則
-
-> 由 AMAGI Core 自動建立。本檔案記錄 Claude 在此專案應遵守的規則。
-
-{pointer}
-
-## 執行方式：自我分步 + 留下軌跡（重要）
-
-接到任何任務，先做以下事，再開始動工：
-
-1. **拆步驟**：把任務拆成數個明確步驟，先在 `.amagi/state/step-results.md` 寫出「步驟清單」。
-2. **逐步執行**：一次只做一步。
-3. **每步寫 result**：每完成一步，立刻在 `.amagi/state/step-results.md` 追加一段：
-   ```
-   ## 步驟 N：<步驟名>
-   - 做了什麼
-   - 產出/修改的檔案
-   - 結果
-   ```
-4. **寫完才前進**：該步的 result 寫好，才能做下一步。
-5. **不可跳步、不可合併步驟。**
-
-> 這份逐步軌跡讓老爺事後能完整看到你每一步怎麼走的。
-
----
-
-## 標準步驟（拆步驟時務必包含這些）
-
-1. **確認可用技能**：相關技能會自動載入（原生 Skills，位於 `.claude/skills/`）。有對應技能 → 照它做；無 → 按工程判斷。
-2. **實作功能**。
-3. **驗證**：跑 build / test，確認沒錯。
-4. **建立 skill 草稿**：在 `.amagi/pending/` 建 `skill-<任務類型>.md`，記錄這次的可重複流程（格式見下）。
-5. **詢問是否 commit**：向老爺報告，⛔ **老爺確認前不得自行執行 git commit**。
-
-### skill 草稿格式
-```
----
-title: 簡短描述這個技能
-scope: project
----
-
-## 描述
-這個技能解決什麼問題、適用於什麼情境。
-
-## 何時使用
-列出會用到這個技能的情境或觸發關鍵字（例：新增 API、四則運算）。
-這段讓未來的 AI 知道何時該套用此技能，請務必填寫。
-
-## 步驟
-1. ...
-
-## 注意事項
-- 常見錯誤或陷阱
-```
-
----
-
-<!-- AMAGI 會在這裡自動插入審核通過的規則 -->
-"#, project_name = project_name, pointer = pointer)
-}
+// 註：專案根 AGENTS.md／CLAUDE.md 的內容統一由 `markdown::build_agents_md`／`build_claude_md`
+// 生成（指針＋記憶內聯＋工作流薄錨），init 與 sync 共用同一來源，杜絕「init 寫豐富版、
+// sync 用薄版覆寫」的分歧。開發工作流 doctrine 全文置於全域錨點（~/.claude、~/.codex）。
 
 pub fn get_project_info(project: &Project) -> ProjectInfo {
     let branch = crate::utils::proc::command("git")
