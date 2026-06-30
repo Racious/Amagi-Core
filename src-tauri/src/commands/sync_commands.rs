@@ -32,6 +32,20 @@ pub async fn sync_agent_files(
     let project = project_manager::get_project(&project_id, &data_dir)
         .ok_or_else(|| AppError::ProjectNotFound(project_id.clone()))?;
 
+    // 方案①跨機回填：sync 前把「vault 有、本機佇列無」的專案記憶補進佇列，
+    // 使後續內聯與孤兒清理（皆以佇列為權威）涵蓋跨機 pull 來的記憶、不誤刪。
+    if let Some(vroot) = vault_manager::get_vault_config(&data_dir).vault_path {
+        let vf = project.vault_folder.clone()
+            .unwrap_or_else(|| agent_exporter::project_vault_folder(&project.path));
+        // 全佇列：id 碰撞守門需涵蓋跨專案/型別；去重 filter 內已限本專案，傳全佇列不影響去重語意。
+        let existing = review_queue::list_items(&data_dir, None);
+        let backfill = agent_exporter::reconcile_project_memory_from_vault(
+            std::path::Path::new(&vroot), &vf, &project_id, &existing);
+        if !backfill.is_empty() {
+            review_queue::add_items(&data_dir, backfill)?;
+        }
+    }
+
     let all_items = review_queue::list_items(&data_dir, Some(&project_id));
     let accepted: Vec<ReviewItem> = all_items.iter()
         .filter(|i| i.status == ReviewStatus::Accepted)
@@ -166,6 +180,16 @@ pub async fn preview_sync_diff(
     }
 
     let vault_root_path = vault_root.as_deref().map(std::path::Path::new);
+    // 預覽也反映跨機回填（不寫佇列，僅併入計算，使預覽與實際 sync 一致）。
+    let mut all_project_memory = all_project_memory;
+    if let Some(vroot) = vault_root_path {
+        let vf = project.vault_folder.clone()
+            .unwrap_or_else(|| agent_exporter::project_vault_folder(&project.path));
+        // 全佇列供 id 碰撞守門（跨專案）；去重 filter 內已限本專案。
+        let queue_all = review_queue::list_items(&data_dir, None);
+        all_project_memory.extend(
+            agent_exporter::reconcile_project_memory_from_vault(vroot, &vf, &project_id, &queue_all));
+    }
     let mut previews = agent_exporter::preview_sync_diff(
         &project.path,
         project.vault_folder.as_deref(),
