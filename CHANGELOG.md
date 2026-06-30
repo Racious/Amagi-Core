@@ -2,6 +2,18 @@
 
 AMAGI Core 的所有重要變更記錄於此。版本遵循語意化版號（major.minor.patch）。
 
+## v0.5.0
+
+交接（handoff）文件路由規範調整：交接改為各專案一份覆寫式活頁，daily 回歸純每日流水。
+
+### 功能
+- **交接落各專案 handoff.md**：handoff 新增專屬桶，落 `projects/<name>/handoff.md`（檔名固定、覆寫式快照、單一真實來源、需指定專案）；取代原「併入頂層 daily/、非破壞」做法。
+- **daily 純每日流水**：doc_router 不再自動落 daily；多專案於同日檔內以 `## [專案名]` section 分隔。
+- **開場讀取 handoff-first**：專案/全域指針生成器與新專案 index 模板改為先讀 `handoff.md`，再讀 index/knowledge/reports。
+
+### 安全
+- handoff 覆寫前以 `symlink_metadata` 攔截 symlink（含 dangling）防越界寫入，其餘 I/O 錯誤 fail-closed（經 Codex 三輪外審收斂）。
+
 ## v0.4.1
 
 0.4.0 後整體重測與舊碼安全稽核（兩輪 Codex）後的安全強化與 UI 修正；無新功能。
