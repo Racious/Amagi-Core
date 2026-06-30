@@ -15,7 +15,7 @@ pub fn build_vault_pointer_block(vault_folder: &str, for_codex: bool, memory_bul
         "<!-- AMAGI-VAULT-PROJECT:BEGIN (Amagi Core 管理，勿手改) -->".to_string(),
         "## 知識庫指針".to_string(),
         format!("本專案知識庫：vault `{}/`（邏輯位置，非絕對路徑）。", vault_folder),
-        "- 接任務前讀該處 `index.md`、`knowledge/`、近期 `reports/` 恢復脈絡。".to_string(),
+        "- 接任務前**先讀該處 `handoff.md`（當前狀態活頁，最新進度）**，再讀 `index.md`、`knowledge/`、近期 `reports/` 恢復脈絡。".to_string(),
         format!("- vault 根的本機路徑見全局指針（`{}` 的 AMAGI-VAULT 區塊）。", anchor),
         "- 產出規範/決策/規格/報告一律寫入該 vault 路徑（依 type 分流），不寫絕對機器路徑。".to_string(),
         String::new(),
@@ -239,6 +239,8 @@ mod tests {
         assert!(agents.contains("AMAGI-VAULT-PROJECT:BEGIN"));
         assert!(agents.contains("projects/foo/"));
         assert!(agents.contains("~/.codex/AGENTS.md"));
+        // 開場讀取須先讀 handoff.md（當前狀態活頁）——交接改專案活頁後的指針同步
+        assert!(agents.contains("handoff.md"), "專案指針應指示先讀 handoff.md");
         // 記憶改內聯：條目直接出現在檔中（非僅指向 agent/memory）
         assert!(agents.contains("本專案記憶"));
         assert!(agents.contains("[測試記憶](test-mem.md)"));

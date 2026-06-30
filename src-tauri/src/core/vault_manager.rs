@@ -143,7 +143,7 @@ fn build_pointer_block(vault_path: &str) -> String {
     s.push_str(BEGIN_MARKER);
     s.push_str("\n# Amagi-Vault 知識庫\n");
     s.push_str(&format!("路徑：{vault_path}\n"));
-    s.push_str("對話開始時讀取該路徑 index.md 與最近 3 份 daily/，規則依該路徑 CLAUDE.md。\n\n");
+    s.push_str("對話開始時讀取該路徑 index.md 與最近 3 份 daily/；涉專案時先讀該專案 handoff.md（當前狀態活頁，最新進度），規則依該路徑 CLAUDE.md。\n\n");
     s.push_str("## 記憶速查（以下索引已內聯，開場即視為已知；需細節再讀對應 `<層>/agent/memory/<檔>`）\n\n");
     s.push_str("### 全域記憶（general，每次對話都適用）\n");
     match &general {

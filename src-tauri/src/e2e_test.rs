@@ -578,11 +578,19 @@ fn e2e_doc_router_routes_by_type_through_real_vault_config() {
     assert_eq!(r2.decision.bucket, "reports");
     assert!(vault_root.join(&r2.destination).is_file());
 
-    // handoff → 頂層 daily/（不需專案）
+    // handoff → 專案交接活頁 handoff.md（需專案、檔名固定、覆寫式快照）
     let handoff = "---\ntitle: 交接\ntype: handoff\n---\nx";
-    let r3 = doc_router::route_document(&vault_root, None, handoff, Some("2026-06-28.md")).unwrap();
-    assert_eq!(r3.destination, "daily/2026-06-28.md");
-    assert!(vault_root.join("daily/2026-06-28.md").is_file());
+    let r3 = doc_router::route_document(&vault_root, Some(&pf), handoff, Some("ignored.md")).unwrap();
+    assert_eq!(r3.decision.bucket, "handoff");
+    assert_eq!(r3.destination, format!("{}/handoff.md", pf));
+    assert!(vault_root.join(&r3.destination).is_file());
+    // 覆寫式：再寫一次覆蓋舊內容、不略過（與其餘桶非破壞語意不同）
+    let handoff2 = "---\ntitle: 交接\ntype: handoff\n---\nY2";
+    let r3b = doc_router::route_document(&vault_root, Some(&pf), handoff2, None).unwrap();
+    assert!(r3b.written && !r3b.skipped);
+    assert!(std::fs::read_to_string(vault_root.join(&r3b.destination)).unwrap().contains("Y2"));
+    // handoff 不再落頂層 daily：缺專案報錯
+    assert!(doc_router::route_document(&vault_root, None, handoff, None).is_err());
 
     // 缺 type → 兜底 knowledge + fallback 標記
     let notype = "---\ntitle: 無型別\n---\nx";

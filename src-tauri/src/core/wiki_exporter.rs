@@ -14,7 +14,7 @@ pub struct WikiWriteResult {
 /// 路徑規則：
 /// - `sync_targets[0]` = 目標層（"general" / "shared" / "projects/<name>"）
 /// - 專案層 → `<vault>/<layer>/<bucket>/<slug>.md`，bucket 由 `doc_router::bucket_for_type`
-///   依 `type` 決定（knowledge / reports；`handoff` 防禦性落回 knowledge）
+///   依 `type` 決定（knowledge / reports；`handoff`（交接活頁）防禦性落回 knowledge）
 /// - general / shared → `<vault>/<layer>/<slug>.md`（扁平，不用 pages/ 子層）
 ///
 /// 非破壞：目標檔已存在則略過，不覆寫既有手做內容（D7）。
@@ -49,8 +49,8 @@ pub fn write_wiki_pages(vault_root: &Path, items: &[ReviewItem]) -> Result<WikiW
             // 專案層：依 type 落三桶（複用 doc_router 桶映射，扁平，對齊 2e-前置 遷移後結構）。
             // 不再建舊 pages/<category>/——根治另一條「重新長出 pages/」的路徑（2e-後續）。
             let (bucket, _) = crate::core::doc_router::bucket_for_type(&category);
-            // wiki 知識頁不會是 handoff；防禦性避免落到頂層 daily 語意的桶。
-            let bucket = if bucket == "daily" { "knowledge" } else { bucket };
+            // wiki 知識頁不會是 handoff；防禦性避免落到交接活頁桶（handoff 落專案根、非 knowledge 子層）。
+            let bucket = if bucket == "handoff" { "knowledge" } else { bucket };
             vault_root.join(&layer).join(bucket)
         } else {
             // general / shared：扁平，不再用 pages/ 子層。

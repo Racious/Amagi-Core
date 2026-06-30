@@ -3,8 +3,11 @@
 //!
 //! 落點對照（amagi-conventions §5；三桶結構見 adr-004 D3）：
 //! `adr`/`spec`/`business`/`concept`/`troubleshooting` → `<專案>/knowledge/`；
-//! `test-report`/`review` → `<專案>/reports/`；`handoff` → 頂層 `daily/`；
+//! `test-report`/`review` → `<專案>/reports/`；
+//! `handoff` → `<專案>/handoff.md`（各專案一份交接活頁，檔名固定、覆寫式快照，需專案）；
 //! 其餘（未知/缺 type）→ `<專案>/knowledge/`（兜底，標記 fallback）。
+//! daily/ 不再由路由器自動落點：純為每日 Session 流水，由 Wiki End 手寫，
+//! 多專案於同日檔內以 `## [專案名]` section 分隔。
 
 use std::io::Write;
 use std::path::{Component, Path};
@@ -23,7 +26,7 @@ pub struct ParsedFrontMatter {
 pub struct RouteDecision {
     /// 正規化後的 type（trim + 小寫）。
     pub doc_type: String,
-    /// 落點桶：`knowledge` / `reports` / `daily`。
+    /// 落點桶：`knowledge` / `reports` / `handoff`。
     pub bucket: String,
     /// vault 根相對目錄（forward slash，跨機相對）。
     pub dir_relative: String,
@@ -85,14 +88,16 @@ pub fn bucket_for_type(doc_type: &str) -> (&'static str, bool) {
     match doc_type {
         "adr" | "spec" | "business" | "concept" | "troubleshooting" => ("knowledge", false),
         "test-report" | "review" => ("reports", false),
-        "handoff" => ("daily", false),
+        "handoff" => ("handoff", false),
         _ => ("knowledge", true),
     }
 }
 
 /// 由 type + 專案資料夾算出落點決策（純函式）。
-/// - `handoff` → 頂層 `daily/`，不需專案。
-/// - 其餘桶需 `project_folder`（如 `projects/amagi-core`）；缺則回錯誤。
+/// - 所有桶（含 `handoff`）皆需 `project_folder`（如 `projects/amagi-core`）；缺則回錯誤。
+/// - `handoff` 落專案根 `projects/<name>/`（檔名固定 handoff.md，見 preview_route）；
+///   其餘桶落 `projects/<name>/<bucket>/`。
+/// - daily/ 不再是路由落點：每日流水由 Wiki End 手寫、多專案以 section 分隔。
 pub fn route_decision(
     raw_type: &str,
     project_folder: Option<&str>,
@@ -100,27 +105,29 @@ pub fn route_decision(
     let doc_type = normalize_type(raw_type);
     let (bucket, is_fallback) = bucket_for_type(&doc_type);
 
-    let dir_relative = if bucket == "daily" {
-        "daily".to_string()
+    let pf = project_folder
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            AppError::InvalidPath(format!(
+                "type「{}」應落在專案 {} 桶，但未指定專案知識庫資料夾",
+                if doc_type.is_empty() { "(空)" } else { &doc_type },
+                bucket
+            ))
+        })?;
+    // 安全驗證：project_folder 必須是 vault 內 `projects/<slug>` 形狀，否則兜底路由器
+    // 會被 state 中遭污染的 vault_folder 變成任意寫入點（D-高）或誤路由到錯桶（D-低）。
+    if !is_valid_project_folder(pf) {
+        return Err(AppError::InvalidPath(format!(
+            "專案知識庫資料夾須為 vault 內 projects/<slug> 形式（拒絕越界/絕對路徑/非標準）：{pf}"
+        )));
+    }
+    let pf = pf.trim_end_matches('/');
+    // handoff 為各專案一份交接活頁，落專案根（不另開子桶）；其餘桶落 `<pf>/<bucket>`。
+    let dir_relative = if bucket == "handoff" {
+        pf.to_string()
     } else {
-        let pf = project_folder
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| {
-                AppError::InvalidPath(format!(
-                    "type「{}」應落在專案 {} 桶，但未指定專案知識庫資料夾",
-                    if doc_type.is_empty() { "(空)" } else { &doc_type },
-                    bucket
-                ))
-            })?;
-        // 安全驗證：project_folder 必須是 vault 內 `projects/<slug>` 形狀，否則兜底路由器
-        // 會被 state 中遭污染的 vault_folder 變成任意寫入點（D-高）或誤路由到錯桶（D-低）。
-        if !is_valid_project_folder(pf) {
-            return Err(AppError::InvalidPath(format!(
-                "專案知識庫資料夾須為 vault 內 projects/<slug> 形式（拒絕越界/絕對路徑/非標準）：{pf}"
-            )));
-        }
-        format!("{}/{bucket}", pf.trim_end_matches('/'))
+        format!("{pf}/{bucket}")
     };
 
     Ok(RouteDecision {
@@ -141,7 +148,12 @@ pub fn preview_route(
     let fm = parse_frontmatter(content);
     let raw_type = fm.doc_type.clone().unwrap_or_default();
     let decision = route_decision(&raw_type, project_folder)?;
-    let filename = derive_filename(explicit_filename, fm.title.as_deref());
+    // handoff 活頁檔名固定 handoff.md（覆寫式單一真實來源），忽略 explicit/title 命名。
+    let filename = if decision.bucket == "handoff" {
+        "handoff.md".to_string()
+    } else {
+        derive_filename(explicit_filename, fm.title.as_deref())
+    };
     let destination = format!("{}/{}", decision.dir_relative, filename);
     Ok((decision, destination))
 }
@@ -186,6 +198,40 @@ pub fn route_document(
     }
 
     let file = vault_root.join(&destination);
+
+    // handoff 為覆寫式快照（各專案單一交接活頁），與其餘桶的非破壞語意不同：直接覆寫既有內容。
+    // 安全：dir 已過 containment 雙檢；若 handoff.md 本身為 symlink，fs::write 會跟隨穿越到 vault 外。
+    // 覆寫前以 symlink_metadata（不跟隨連結、不依賴 file.exists()）攔截——dangling symlink 的
+    // exists() 為 false，用 exists() 把關會漏檢致越界寫入（Codex 外審 D-高）。handoff.md 應為一般檔，
+    // 凡 symlink 一律拒絕；既存一般檔再以 canonical 雙檢仍在 vault 根下。
+    if decision.bucket == "handoff" {
+        match std::fs::symlink_metadata(&file) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                return Err(AppError::InvalidPath(format!(
+                    "handoff 活頁目標為 symlink，已拒絕覆寫（防穿越）：{destination}"
+                )));
+            }
+            Ok(_) => {
+                if !is_within_vault(vault_root, &file)? {
+                    return Err(AppError::InvalidPath(format!(
+                        "handoff 活頁目標逃出 vault 根，已拒絕覆寫：{destination}"
+                    )));
+                }
+            }
+            // 僅「目標不存在」才放行（dir 已過 containment 雙檢）；其餘 I/O 錯誤（權限/中斷等）
+            // fail-closed 直接回報，不與 NotFound 同等視為不存在（Codex r2 D-低）。
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(AppError::Io(e.to_string())),
+        }
+        // 殘留 TOCTOU（檢查→寫入間可被替換）對單機本地桌面 app 非現實威脅，沿用本檔既有 D-低取捨。
+        std::fs::write(&file, content).map_err(|e| AppError::Io(e.to_string()))?;
+        return Ok(RouteResult {
+            decision,
+            destination,
+            written: true,
+            skipped: false,
+        });
+    }
 
     // 非破壞 + 原子：create_new 同時完成「不存在才建」，免去 exists/write 競態（D-低）。
     match std::fs::OpenOptions::new()
@@ -367,7 +413,7 @@ mod tests {
         assert_eq!(bucket_for_type("troubleshooting"), ("knowledge", false));
         assert_eq!(bucket_for_type("test-report"), ("reports", false));
         assert_eq!(bucket_for_type("review"), ("reports", false));
-        assert_eq!(bucket_for_type("handoff"), ("daily", false));
+        assert_eq!(bucket_for_type("handoff"), ("handoff", false));
     }
 
     #[test]
@@ -388,11 +434,33 @@ mod tests {
     }
 
     #[test]
-    fn test_route_decision_handoff_goes_top_level_daily() {
-        // handoff 不需專案，落頂層 daily/
-        let d = route_decision("handoff", None).unwrap();
-        assert_eq!(d.bucket, "daily");
-        assert_eq!(d.dir_relative, "daily");
+    fn test_route_decision_handoff_goes_to_project_living_page() {
+        // handoff 改為各專案交接活頁：需專案、落專案根（不另開子桶）。
+        let d = route_decision("handoff", Some("projects/amagi-core")).unwrap();
+        assert_eq!(d.bucket, "handoff");
+        assert_eq!(d.dir_relative, "projects/amagi-core");
+        assert!(!d.is_fallback);
+    }
+
+    #[test]
+    fn test_route_decision_handoff_without_project_errors() {
+        // handoff 不再走頂層 daily：缺專案視同其餘桶一律報錯。
+        assert!(route_decision("handoff", None).is_err());
+    }
+
+    #[test]
+    fn test_no_type_routes_to_daily() {
+        // daily/ 純為每日 Session 流水（手寫、多專案以 section 分隔），
+        // 任何 type 都不應再被路由器落到 daily（含 handoff、未知 type 兜底）。
+        for ty in ["adr", "spec", "review", "test-report", "handoff", "亂填", ""] {
+            let d = route_decision(ty, Some("projects/x")).unwrap();
+            assert_ne!(d.bucket, "daily", "type「{ty}」不應落 daily 桶");
+            assert!(
+                !d.dir_relative.split('/').any(|seg| seg == "daily"),
+                "type「{ty}」落點不應含 daily 段：{}",
+                d.dir_relative
+            );
+        }
     }
 
     #[test]
@@ -501,14 +569,55 @@ mod tests {
     }
 
     #[test]
-    fn test_route_document_handoff_to_top_level_daily() {
+    fn test_route_document_handoff_overwrites_project_living_page() {
         let dir = std::env::temp_dir().join(format!("amagi-router-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
-        let content = "---\ntitle: 換窗交接\ntype: handoff\n---\n交接內容";
-        // handoff 不傳專案也可
-        let res = route_document(&dir, None, content, Some("2026-06-28.md")).unwrap();
-        assert_eq!(res.destination, "daily/2026-06-28.md");
-        assert!(dir.join("daily/2026-06-28.md").exists());
+        // 首次：落專案根、檔名固定 handoff.md（忽略 explicit filename / title）。
+        let v1 = "---\ntitle: 換窗交接\ntype: handoff\n---\n第一版交接";
+        let r1 = route_document(&dir, Some("projects/x"), v1, Some("ignored.md")).unwrap();
+        assert_eq!(r1.decision.bucket, "handoff");
+        assert_eq!(r1.destination, "projects/x/handoff.md");
+        assert!(r1.written && !r1.skipped);
+        assert!(dir.join("projects/x/handoff.md").exists());
+        // 再次：覆寫式快照 → 覆蓋既有內容，不略過（與其餘桶非破壞語意不同）。
+        let v2 = "---\ntitle: 換窗交接\ntype: handoff\n---\n第二版交接";
+        let r2 = route_document(&dir, Some("projects/x"), v2, None).unwrap();
+        assert!(r2.written && !r2.skipped);
+        let kept = std::fs::read_to_string(dir.join("projects/x/handoff.md")).unwrap();
+        assert!(kept.contains("第二版交接"));
+        assert!(!kept.contains("第一版交接"));
+        // handoff 需專案：缺專案報錯（不再落頂層 daily）。
+        assert!(route_document(&dir, None, v1, None).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_route_document_handoff_rejects_symlink_target() {
+        // Codex 外審 D-高：handoff.md 若為（含 dangling）symlink，覆寫須拒絕、不得跟隨穿越到 vault 外。
+        let dir = std::env::temp_dir().join(format!("amagi-router-{}", uuid::Uuid::new_v4()));
+        let proj = dir.join("projects/x");
+        std::fs::create_dir_all(&proj).unwrap();
+        // vault 外、尚不存在的目標 → handoff.md 指向它（dangling symlink，exists()=false）。
+        // 用 dir.parent() 確保跨平台都真正落在 vault root（dir）之外（Codex r2 D-低）。
+        let outside = dir
+            .parent()
+            .unwrap()
+            .join(format!("outside-{}.md", uuid::Uuid::new_v4()));
+        let link = proj.join("handoff.md");
+        #[cfg(windows)]
+        let made = std::os::windows::fs::symlink_file(&outside, &link).is_ok();
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink(&outside, &link).is_ok();
+        if !made {
+            // 環境無建立 symlink 權限（如 Windows 未開啟開發者模式）→ 略過此測試，不誤報失敗。
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+        let content = "---\ntitle: 交接\ntype: handoff\n---\nx";
+        let res = route_document(&dir, Some("projects/x"), content, None);
+        assert!(res.is_err(), "handoff.md 為 symlink 應拒絕覆寫");
+        // 不得跟隨 symlink 在 vault 外建立/寫入目標檔。
+        assert!(!outside.exists(), "不得跟隨 symlink 在 vault 外建立檔案");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -110,7 +110,7 @@ const error = ref<string | null>(null)
 const successMsg = ref<string | null>(null)
 
 // 對齊 amagi-conventions §5 知識桶型別（adr/spec/business/concept/troubleshooting → knowledge/）。
-// reports 類（review/test-report）由 Codex/測試流程自動寫入、handoff 由天城寫 daily/，
+// reports 類（review/test-report）由 Codex/測試流程自動寫入、handoff 由天城寫各專案活頁 handoff.md，
 // 皆不從「知識匯入」入口手工產出（老爺裁定，2026-06-28）。
 const pageTypes = ['adr', 'spec', 'business', 'concept', 'troubleshooting']
 

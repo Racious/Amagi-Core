@@ -33,7 +33,8 @@ fn vault_root(state: &State<'_, AppState>) -> Result<String, AppError> {
 }
 
 /// 由 project_id 解析其 vault 邏輯資料夾（如 `projects/amagi-core`）。
-/// project_id 為 None → 回 None（handoff 等頂層落點不需專案）。
+/// project_id 為 None → 回 None；所有桶（含 handoff 交接活頁）皆需專案，
+/// 故 route 階段缺專案會報錯（handoff 已不再落頂層 daily）。
 fn resolve_project_folder(
     project_id: Option<&str>,
     state: &State<'_, AppState>,
