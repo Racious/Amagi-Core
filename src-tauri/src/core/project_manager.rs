@@ -241,7 +241,7 @@ fn build_project_index_md(name: &str) -> String {
     format!(
         r#"# {name} — 專案知識目錄
 
-> 由 Amagi Core 建立。對話開始時，天城先閱讀本檔了解專案背景。
+> 由 Amagi Core 建立。對話開始時，涉本專案先讀 [handoff.md](handoff.md)（當前狀態活頁），再讀本檔了解知識目錄與背景。
 
 ---
 
@@ -253,9 +253,10 @@ fn build_project_index_md(name: &str) -> String {
 |------|------|------|
 | 知識 | [knowledge/](knowledge/) | 人看、可發布 docs/（`type`: adr/spec/business/concept/troubleshooting）|
 | 報告 | [reports/](reports/) | 稽核紀錄（`type`: test-report/review）|
+| 交接 | [handoff.md](handoff.md) | 當前狀態活頁（`type`: handoff；覆寫式快照、單一真實來源）|
 | AI 私有 | agent/ | 長期記憶、指針（按需建立）|
 
-（交接 handoff → 頂層 `daily/`，不另開桶。）
+（交接 handoff → 本專案活頁 [handoff.md](handoff.md)，覆寫式快照、單一真實來源；不再落頂層 daily/。）
 
 ### 頁面清單
 
