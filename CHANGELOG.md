@@ -2,6 +2,22 @@
 
 AMAGI Core 的所有重要變更記錄於此。版本遵循語意化版號（major.minor.patch）。
 
+## v0.7.0
+
+記憶同步反轉為 vault-first（杜絕幽靈復活）＋ 全域 doctrine 一鍵部署（跨機零手改）＋ UI 修正。
+
+### 功能
+- **記憶同步 vault-first（Phase 1）**：vault 檔案集合為唯一權威；記憶成功寫入 vault 後從佇列**出列**，不再標 `Synced` 長留。索引/內聯/孤兒處理改由 vault 現有檔重建（新增 `read_memory_dir`/`load_*_from_vault`），移除「以佇列集合刪 vault 檔」的清理（非受管檔一律忽略、不刪）；一次性 migration 清佇列殘留 Synced（備份可回滾）。**根治「vault 端刪除記憶、同步又復活」的幽靈。**
+- **全域 doctrine 一鍵部署（步驟5）**：新增「同步全域 doctrine」——app 讀 vault `general/_meta/global-agent-config.md`（AMAGI-DOCTRINE 標記界定）整檔部署到本機 `~/.claude/CLAUDE.md`、`~/.codex/AGENTS.md`。fail-closed（render+safety 皆在寫入前）、原子 temp+rename、首次 `.predeploy.bak`＋rolling `.bak`、第二檔失敗交易式回滾、Codex override/32KiB 警告。**跨機只需 pull vault → 按鈕一鍵，零手改。**
+
+### 修正
+- **確認對話框**：`window.confirm`（Tauri webview 無效）→ `@tauri-apps/plugin-dialog` 的 `ask`（同步全域部署、移除專案）。
+- **同步預覽**：改真 line-diff（LCS，比對現況 vs 新內容）＋ CRLF/LF 正規化＋濾掉無變更檔，修「diff 亂標紅」「同步完仍一直有東西」。
+- **dev 自我重載**：vite watch 忽略生成的 agent 檔／`.amagi`，dogfood 同步 app 自身時不再整頁重載。
+
+### 安全
+- 記憶/全域檔寫入皆 fail-closed + 備份 + 原子/交易式；非受管檔一律忽略不刪。經 Codex 設計審查 + 多輪程式碼外審收斂。
+
 ## v0.6.0
 
 跨機記憶讀取鏈補完 + 工作流生成器統一：修復專案層記憶跨機讀取鏈缺口，並讓 init／sync 共用同一份生成器，杜絕紀律被覆寫。
