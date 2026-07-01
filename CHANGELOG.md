@@ -2,6 +2,18 @@
 
 AMAGI Core 的所有重要變更記錄於此。版本遵循語意化版號（major.minor.patch）。
 
+## v0.6.0
+
+跨機記憶讀取鏈補完 + 工作流生成器統一：修復專案層記憶跨機讀取鏈缺口，並讓 init／sync 共用同一份生成器，杜絕紀律被覆寫。
+
+### 修正
+- **跨機記憶讀取鏈缺口回填**：新增 `reconcile_project_memory_from_vault`，sync/preview 前把「vault 有、本機佇列無」的合法專案記憶檔回填佇列，避免 B 機 sync 把 pull 下來的專案記憶當孤兒誤刪；三道守門（frontmatter 格式齊備防洗白、佇列 id 碰撞防護、檔名一致性）+ `created` 時區對稱換算（防負時區漂移）+ 讀檔前 symlink TOCTOU 重驗。
+
+### 功能
+- **AGENTS.md／CLAUDE.md 生成器統一**：`init_project` 改呼叫與 `sync` 相同的 `markdown::build_agents_md`／`build_claude_md`，避免「init 寫豐富版、首次 sync 用薄版覆寫」造成紀律漂移；移除過時的 `build_initial_agents_md`／`build_initial_claude_md`。
+- **開發工作流薄錨**：專案層 AGENTS.md／CLAUDE.md 新增「開發工作流」薄錨區塊（指向全域 doctrine + 本機軌跡檔），全域 `CLAUDE.md` 不重覆帶。
+- **工作流軌跡模板改版**：`.amagi/workflow-state.md` 從勾選式步驟改為「計畫步驟＋逐步結果＋證據欄」，並新增 4.5 交叉審查步驟；完成後歸檔至 `.amagi/history/`。
+
 ## v0.5.0
 
 交接（handoff）文件路由規範調整：交接改為各專案一份覆寫式活頁，daily 回歸純每日流水。
