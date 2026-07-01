@@ -173,6 +173,7 @@ pub fn run() {
             get_bridge_run,
             cancel_bridge_run,
             set_vault_path,
+            deploy_global_doctrine,
             get_vault_config,
             get_vault_status,
             init_project_vault,

@@ -1,7 +1,7 @@
 use std::path::Path;
 use tauri::State;
 use crate::{AppError, AppState};
-use crate::core::{project_manager, vault_git, vault_manager::{self, VaultConfig, VaultSetResult, VaultStatus}};
+use crate::core::{project_manager, vault_git, vault_manager::{self, VaultConfig, VaultSetResult, VaultStatus, DeployResult}};
 use crate::models::project::InitResult;
 
 #[tauri::command]
@@ -10,6 +10,13 @@ pub async fn set_vault_path(
     state: State<'_, AppState>,
 ) -> Result<VaultSetResult, AppError> {
     vault_manager::set_vault_path(&path, &state.data_dir)
+}
+
+/// 步驟5「同步全域」：把 vault `general/_meta/global-agent-config.md` 整檔部署到
+/// 本機 ~/.claude/CLAUDE.md 與 ~/.codex/AGENTS.md（fail-closed + 備份 + 原子寫入）。
+#[tauri::command]
+pub async fn deploy_global_doctrine(state: State<'_, AppState>) -> Result<DeployResult, AppError> {
+    vault_manager::deploy_global_doctrine(&state.data_dir)
 }
 
 #[tauri::command]

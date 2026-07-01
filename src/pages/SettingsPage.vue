@@ -98,8 +98,17 @@
         <button class="btn btn-ghost btn-sm" :disabled="gitBusy || !vaultPath" @click="gitSync">提交並推送</button>
         <button class="btn btn-ghost btn-sm" :disabled="gitBusy || !vaultPath" @click="gitStatus">狀態</button>
       </div>
-      <p v-if="vaultMsg" class="text-xs mt-2" style="color: var(--c-accent);">{{ vaultMsg }}</p>
-      <p v-if="vaultWarn" class="text-xs mt-2" style="color: var(--c-warn, #b45309);">{{ vaultWarn }}</p>
+      <div class="mt-3 pt-3" style="border-top: 1px solid var(--c-border, #e5e7eb);">
+        <p class="text-xs text-muted mb-2">
+          同步全域 doctrine：把 vault 的 <code>general/_meta/global-agent-config.md</code>（人格／Git／工作流）
+          <strong>整檔覆蓋</strong>本機 ~/.claude/CLAUDE.md 與 ~/.codex/AGENTS.md（首次保留原始 <code>.predeploy.bak</code>、每次留 <code>.bak</code>）。跨機只需 pull vault 後按此。
+        </p>
+        <button class="btn btn-primary btn-sm" :disabled="deployBusy || !vaultPath" @click="deployDoctrine">
+          {{ deployBusy ? '部署中…' : '同步全域 doctrine' }}
+        </button>
+      </div>
+      <p v-if="vaultMsg" class="text-xs mt-2 whitespace-pre-line break-all" style="color: var(--c-accent);">{{ vaultMsg }}</p>
+      <p v-if="vaultWarn" class="text-xs mt-2 whitespace-pre-line" style="color: var(--c-warn, #b45309);">{{ vaultWarn }}</p>
       <pre v-if="gitMsg" class="text-xs mt-2 whitespace-pre-wrap text-muted">{{ gitMsg }}</pre>
     </div>
 
@@ -185,6 +194,26 @@ async function chooseVault() {
     vaultWarn.value = `設定失敗：${e?.message ?? e}`
   } finally {
     vaultBusy.value = false
+  }
+}
+
+// ── 步驟5：同步全域 doctrine（整檔部署）──────────────
+const deployBusy = ref(false)
+
+async function deployDoctrine() {
+  vaultMsg.value = ''
+  vaultWarn.value = ''
+  if (!confirm('同步全域 doctrine 會用 vault 的 global-agent-config.md「整檔覆蓋」~/.claude/CLAUDE.md 與 ~/.codex/AGENTS.md（首次保留 .predeploy.bak，每次留 .bak）。確定嗎？')) return
+  deployBusy.value = true
+  try {
+    const r = await api.deployGlobalDoctrine()
+    vaultMsg.value = `已部署全域 doctrine：\n・${r.claudePath}\n・${r.codexPath}`
+      + (r.backupMade ? '\n（首次原始版存於 <檔>.predeploy.bak、前一版存於 <檔>.bak，可還原）' : '')
+    if (r.warnings.length) vaultWarn.value = r.warnings.join('\n')
+  } catch (e: any) {
+    vaultWarn.value = `部署失敗（未寫入）：${e?.message ?? e}`
+  } finally {
+    deployBusy.value = false
   }
 }
 

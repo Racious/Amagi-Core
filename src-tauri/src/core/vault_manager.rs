@@ -229,6 +229,184 @@ fn append_block(existing: &str, block: &str) -> String {
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// 步驟5：全域 doctrine 自動部署（adr-005 精神；設計審查 2026-07-01-step5-...）。
+// vault `general/_meta/global-agent-config.md` 為唯一源 → 整檔部署到本機
+// ~/.claude/CLAUDE.md（H1 `# CLAUDE.md`）與 ~/.codex/AGENTS.md（H1 `# AGENTS.md`）。
+// fail-closed：任何解析/render/safety 失敗一律不寫；寫入用 temp+原子 rename + 備份。
+// ─────────────────────────────────────────────────────────────────────────
+
+const DOCTRINE_BEGIN_TOKEN: &str = "AMAGI-DOCTRINE:BEGIN";
+const DOCTRINE_END_TOKEN: &str = "AMAGI-DOCTRINE:END";
+
+/// 全域 doctrine 部署結果，回報前端。
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeployResult {
+    pub claude_path: String,
+    pub codex_path: String,
+    pub backup_made: bool,
+    /// 部署提醒（Codex override 存在、AGENTS.md 逼近 32 KiB 等），非錯誤。
+    pub warnings: Vec<String>,
+}
+
+/// `<file>.<suffix>`：附加副檔名，**不吃掉原 `.md`**（有別於 `with_extension`：CLAUDE.md → CLAUDE.md.bak）。
+fn append_suffix(path: &Path, suffix: &str) -> PathBuf {
+    let mut s = path.as_os_str().to_os_string();
+    s.push(".");
+    s.push(suffix);
+    PathBuf::from(s)
+}
+
+/// 從標準檔原文抽「可部署本體」（`AMAGI-DOCTRINE:BEGIN/END` 之間、不含標記行）。
+/// 恰好一組 begin/end 且 begin<end，否則 Err（畸形 → fail-closed，不寫任何檔）。
+fn extract_doctrine_body(source: &str) -> Result<String, AppError> {
+    let begin_n = source.matches(DOCTRINE_BEGIN_TOKEN).count();
+    let end_n = source.matches(DOCTRINE_END_TOKEN).count();
+    if begin_n != 1 || end_n != 1 {
+        return Err(AppError::InvalidPath(format!(
+            "global-agent-config.md 的 AMAGI-DOCTRINE 標記需恰好一組（begin={begin_n}, end={end_n}）"
+        )));
+    }
+    let b = source.find(DOCTRINE_BEGIN_TOKEN).unwrap();
+    let e = source.find(DOCTRINE_END_TOKEN).unwrap();
+    if b >= e {
+        return Err(AppError::InvalidPath("AMAGI-DOCTRINE:BEGIN 必須在 END 之前".into()));
+    }
+    let body_start = source[b..].find('\n').map(|i| b + i + 1)
+        .ok_or_else(|| AppError::InvalidPath("AMAGI-DOCTRINE:BEGIN 行格式異常".into()))?;
+    let body_end = source[..e].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    if body_end <= body_start {
+        return Err(AppError::InvalidPath("AMAGI-DOCTRINE 本體為空".into()));
+    }
+    Ok(source[body_start..body_end].trim_end().to_string())
+}
+
+/// render 可部署本體為某目標全域檔內容：
+/// ① 第一個非空行須是 H1 → 取代為 `target_h1`（否則畸形 Err，不 silently prepend）
+/// ② 本體內 `AMAGI-VAULT` 佔位（恰好一組）→ 換成 `build_pointer_block(vault_path)` 真實內容
+/// ③ 驗證輸出：AMAGI-VAULT 恰好一組、無殘留 AMAGI-DOCTRINE 標記
+fn render_global_doctrine(body: &str, target_h1: &str, vault_path: &str) -> Result<String, AppError> {
+    let lines: Vec<&str> = body.lines().collect();
+    let h1_idx = lines.iter().position(|l| !l.trim().is_empty())
+        .ok_or_else(|| AppError::InvalidPath("doctrine 本體為空".into()))?;
+    if !lines[h1_idx].trim_start().starts_with("# ") {
+        return Err(AppError::InvalidPath("doctrine 本體第一個非空行不是 H1（標準檔畸形）".into()));
+    }
+    if body.matches(BEGIN_MARKER).count() != 1 || body.matches(END_MARKER).count() != 1 {
+        return Err(AppError::InvalidPath("doctrine 本體內 AMAGI-VAULT 標記需恰好一組".into()));
+    }
+    let mut out: Vec<String> = lines.iter().map(|s| s.to_string()).collect();
+    out[h1_idx] = target_h1.to_string();
+    let content = out.join("\n");
+    let block = build_pointer_block(vault_path);
+    let (content, _) = splice_managed_block(&content, &block);
+    if content.matches(BEGIN_MARKER).count() != 1 || content.matches(END_MARKER).count() != 1 {
+        return Err(AppError::InvalidPath("render 後 AMAGI-VAULT 標記數異常".into()));
+    }
+    if content.contains(DOCTRINE_BEGIN_TOKEN) || content.contains(DOCTRINE_END_TOKEN) {
+        return Err(AppError::InvalidPath("render 後不應殘留 AMAGI-DOCTRINE 標記".into()));
+    }
+    Ok(content)
+}
+
+/// 原子寫入全域檔（Codex #1/#5）：首次 `.predeploy.bak`（create-new，永不覆寫，保留跨機導入前原始版）
+/// + rolling `.bak`（可覆寫，最近一次）+ temp 檔 + 原子 rename。回傳是否有做備份。
+fn write_global_atomic(target: &Path, content: &str) -> Result<bool, AppError> {
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| AppError::Io(e.to_string()))?;
+    }
+    let mut backup_made = false;
+    if target.exists() {
+        let orig = std::fs::read(target).map_err(|e| AppError::Io(e.to_string()))?;
+        let predeploy = append_suffix(target, "predeploy.bak");
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&predeploy) {
+            Ok(mut f) => {
+                use std::io::Write;
+                f.write_all(&orig).map_err(|e| AppError::Io(e.to_string()))?;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(AppError::Io(e.to_string())),
+        }
+        std::fs::write(append_suffix(target, "bak"), &orig).map_err(|e| AppError::Io(e.to_string()))?;
+        backup_made = true;
+    }
+    let tmp = append_suffix(target, "tmp");
+    std::fs::write(&tmp, content).map_err(|e| AppError::Io(e.to_string()))?;
+    std::fs::rename(&tmp, target).map_err(|e| AppError::Io(e.to_string()))?;
+    Ok(backup_made)
+}
+
+/// 步驟5 主流程：讀 vault 標準檔 → 抽本體 → render 兩目標 → safety → 原子寫入兩全域檔。
+/// 全部 render+safety 在任何寫入前完成（fail-closed）；第二檔寫入失敗嘗試回滾第一檔。
+pub fn deploy_global_doctrine(data_dir: &Path) -> Result<DeployResult, AppError> {
+    let vault_path = get_vault_config(data_dir).vault_path
+        .ok_or_else(|| AppError::InvalidPath("尚未設定 vault 路徑，無法部署全域 doctrine".into()))?;
+    let source_path = Path::new(&vault_path)
+        .join("general").join("_meta").join("global-agent-config.md");
+    let source = std::fs::read_to_string(&source_path).map_err(|e| AppError::InvalidPath(
+        format!("讀不到 vault 全域標準檔 general/_meta/global-agent-config.md（{e}）")))?;
+    let claude_md = fs_utils::global_claude_md_path()
+        .ok_or_else(|| AppError::Io("無法取得 ~/.claude/CLAUDE.md 路徑".into()))?;
+    let codex_agents = fs_utils::global_codex_agents_md_path()
+        .ok_or_else(|| AppError::Io("無法取得 ~/.codex/AGENTS.md 路徑".into()))?;
+    deploy_doctrine_to(&source, &vault_path, &claude_md, &codex_agents)
+}
+
+/// 可測核心：render 兩目標 + safety（皆在任何寫入前）→ 原子寫入；第二檔失敗交易式回滾第一檔。
+fn deploy_doctrine_to(source: &str, vault_path: &str, claude_md: &Path, codex_agents: &Path) -> Result<DeployResult, AppError> {
+    let body = extract_doctrine_body(source)?;
+    let claude_content = render_global_doctrine(&body, "# CLAUDE.md", vault_path)?;
+    let codex_content = render_global_doctrine(&body, "# AGENTS.md", vault_path)?;
+    // safety（含 masked snippet，Codex #4）；兩份都過才寫，fail-closed。
+    for (name, c) in [("~/.claude/CLAUDE.md", &claude_content), ("~/.codex/AGENTS.md", &codex_content)] {
+        let s = safety_filter::check(c);
+        if !s.is_safe {
+            let hits: Vec<String> = s.hits.iter().map(|h| format!("{}：{}", h.label, h.masked)).collect();
+            return Err(AppError::SafetyBlocked(format!(
+                "全域 doctrine 疑似含敏感內容（於 {name}），未寫入任何檔案。命中：{}。若為 commit SHA／雜湊等誤判，請修 vault 標準檔（不提供強制略過）。",
+                hits.join("；")
+            )));
+        }
+    }
+    // 部署提醒（非錯誤）：Codex override 優先、AGENTS.md 逼近 32 KiB 截斷（Codex #7）。
+    let mut warnings = Vec::new();
+    if let Some(codex_dir) = codex_agents.parent() {
+        let ov = codex_dir.join("AGENTS.override.md");
+        if ov.is_file() && std::fs::read_to_string(&ov).map(|s| !s.trim().is_empty()).unwrap_or(false) {
+            warnings.push("偵測到 ~/.codex/AGENTS.override.md（非空）：Codex 會優先讀它，本次部署的 AGENTS.md 可能不生效。".to_string());
+        }
+    }
+    if codex_content.as_bytes().len() > 24 * 1024 {
+        warnings.push(format!("~/.codex/AGENTS.md 部署後約 {} KiB，接近 Codex 預設 32 KiB 上限，可能被截斷。", codex_content.as_bytes().len() / 1024));
+    }
+    // 原子寫入：claude 先、codex 後；codex 失敗交易式回滾 claude（Codex #2）：
+    // 原本存在 → 從 .bak 還原；原本不存在 → 刪除新建檔。回滾失敗誠實回報 partial state。
+    let claude_existed = claude_md.exists();
+    let b1 = write_global_atomic(claude_md, &claude_content)?;
+    let b2 = match write_global_atomic(codex_agents, &codex_content) {
+        Ok(b) => b,
+        Err(e) => {
+            let rolled_back = if claude_existed {
+                std::fs::copy(append_suffix(claude_md, "bak"), claude_md).is_ok()
+            } else {
+                std::fs::remove_file(claude_md).is_ok()
+            };
+            return Err(AppError::Io(if rolled_back {
+                format!("~/.codex/AGENTS.md 寫入失敗（{e}）；已回滾 ~/.claude/CLAUDE.md，請重試「同步全域」。")
+            } else {
+                format!("~/.codex/AGENTS.md 寫入失敗（{e}），且 ~/.claude/CLAUDE.md 回滾失敗——可能為半部署狀態，請檢查 {} 及其 .predeploy.bak／.bak。", claude_md.to_string_lossy())
+            }));
+        }
+    };
+    Ok(DeployResult {
+        claude_path: claude_md.to_string_lossy().to_string(),
+        codex_path: codex_agents.to_string_lossy().to_string(),
+        backup_made: b1 || b2,
+        warnings,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -299,5 +477,104 @@ mod tests {
         assert!(st.configured && st.is_git_repo);
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // ── 步驟5：全域 doctrine 部署 ──────────────────────────────
+    #[test]
+    fn test_extract_doctrine_body_ok_and_malformed() {
+        let src = "---\ntitle: x\n---\n# 說明\n> note\n<!-- AMAGI-DOCTRINE:BEGIN (x) -->\n# 天城人格\n內容一\n<!-- AMAGI-VAULT:BEGIN (Amagi Core 管理，勿手改) -->\n（佔位）\n<!-- AMAGI-VAULT:END -->\n<!-- AMAGI-DOCTRINE:END -->\n";
+        let body = extract_doctrine_body(src).unwrap();
+        assert!(body.starts_with("# 天城人格"), "本體應從人格 H1 起");
+        assert!(body.contains("AMAGI-VAULT:BEGIN"), "本體含 vault 佔位");
+        assert!(!body.contains("AMAGI-DOCTRINE"), "本體不含 DOCTRINE 標記行");
+        assert!(!body.contains("# 說明"), "說明區不入本體");
+        // 畸形 → Err（fail-closed）
+        assert!(extract_doctrine_body("# 無標記").is_err(), "無標記應 Err");
+        assert!(extract_doctrine_body(&format!("{src}\n<!-- AMAGI-DOCTRINE:BEGIN -->")).is_err(), "重複 begin 應 Err");
+    }
+
+    #[test]
+    fn test_render_global_doctrine_replaces_h1_and_vault_block() {
+        let body = "# 天城人格\n忠誠\n<!-- AMAGI-VAULT:BEGIN (Amagi Core 管理，勿手改) -->\n（佔位）\n<!-- AMAGI-VAULT:END -->";
+        let out = render_global_doctrine(body, "# CLAUDE.md", "C:\\v").unwrap();
+        assert!(out.starts_with("# CLAUDE.md"), "第一個 H1 應被取代");
+        assert!(!out.contains("# 天城人格"), "原 H1 應消失");
+        assert!(out.contains("路徑：C:\\v"), "AMAGI-VAULT 佔位應換成真實 pointer block");
+        assert!(!out.contains("（佔位）"), "佔位文字應被取代");
+        assert_eq!(out.matches(BEGIN_MARKER).count(), 1, "AMAGI-VAULT 應恰好一組");
+        assert!(!out.contains("AMAGI-DOCTRINE"), "不應殘留 DOCTRINE 標記");
+        // 畸形：本體第一非空行非 H1 → Err
+        let bad = "內容非標題\n<!-- AMAGI-VAULT:BEGIN (Amagi Core 管理，勿手改) -->\nx\n<!-- AMAGI-VAULT:END -->";
+        assert!(render_global_doctrine(bad, "# CLAUDE.md", "C:\\v").is_err(), "第一非空行非 H1 應 Err");
+    }
+
+    #[test]
+    fn test_append_suffix_keeps_md() {
+        let p = Path::new("C:\\x\\CLAUDE.md");
+        assert_eq!(append_suffix(&p, "bak").to_string_lossy().replace('\\', "/"), "C:/x/CLAUDE.md.bak");
+    }
+
+    #[test]
+    fn test_write_global_atomic_replaces_existing_and_backs_up() {
+        // 實測 Codex #1：既有檔能否被 write_global_atomic 原子替換（Windows rename replace-existing）。
+        let dir = std::env::temp_dir().join(format!("amagi-wga-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("CLAUDE.md");
+        std::fs::write(&target, "原始內容").unwrap();
+        let b = write_global_atomic(&target, "新內容 v1").unwrap();
+        assert!(b, "既有檔應有備份");
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "新內容 v1", "既有檔應被替換");
+        assert_eq!(std::fs::read_to_string(dir.join("CLAUDE.md.predeploy.bak")).unwrap(), "原始內容", "首次原始備份");
+        assert_eq!(std::fs::read_to_string(dir.join("CLAUDE.md.bak")).unwrap(), "原始內容", "rolling 備份");
+        // 第二次：predeploy 永不覆寫、rolling 更新為前一版、temp 不殘留
+        write_global_atomic(&target, "新內容 v2").unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("CLAUDE.md.predeploy.bak")).unwrap(), "原始內容", "predeploy 永不覆寫");
+        assert_eq!(std::fs::read_to_string(dir.join("CLAUDE.md.bak")).unwrap(), "新內容 v1", "rolling = 前一版");
+        assert!(!dir.join("CLAUDE.md.tmp").exists(), "temp 不殘留");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_write_global_atomic_new_target_no_backup() {
+        let dir = std::env::temp_dir().join(format!("amagi-wga2-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("AGENTS.md");
+        let b = write_global_atomic(&target, "全新").unwrap();
+        assert!(!b, "新檔無備份");
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "全新");
+        assert!(!dir.join("AGENTS.md.predeploy.bak").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_deploy_rollback_on_second_target_failure() {
+        // Codex #2：第二檔寫入失敗時，第一檔須交易式回滾為原始內容。
+        let dir = std::env::temp_dir().join(format!("amagi-deploy-rb-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let source = "<!-- AMAGI-DOCTRINE:BEGIN -->\n# T\n內容\n<!-- AMAGI-VAULT:BEGIN (Amagi Core 管理，勿手改) -->\n（佔位）\n<!-- AMAGI-VAULT:END -->\n<!-- AMAGI-DOCTRINE:END -->";
+        let claude = dir.join("CLAUDE.md");
+        std::fs::write(&claude, "原始 claude").unwrap();
+        // 第二目標故意設成「目錄」→ write_global_atomic 把既有目標當檔讀取失敗 → 觸發回滾
+        let codex_dir = dir.join("AGENTS.md");
+        std::fs::create_dir_all(&codex_dir).unwrap();
+        let r = deploy_doctrine_to(source, "C:\\v", &claude, &codex_dir);
+        assert!(r.is_err(), "第二檔（目錄）寫入失敗應 Err");
+        assert_eq!(std::fs::read_to_string(&claude).unwrap(), "原始 claude", "第一檔應交易式回滾為原始");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_deploy_rollback_deletes_new_first_file_when_absent() {
+        // Codex R2 Low：第一檔原本不存在、第二檔失敗 → 回滾應刪除新建的第一檔（回到「不存在」）。
+        let dir = std::env::temp_dir().join(format!("amagi-deploy-rb2-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let source = "<!-- AMAGI-DOCTRINE:BEGIN -->\n# T\n內容\n<!-- AMAGI-VAULT:BEGIN (Amagi Core 管理，勿手改) -->\n（佔位）\n<!-- AMAGI-VAULT:END -->\n<!-- AMAGI-DOCTRINE:END -->";
+        let claude = dir.join("CLAUDE.md"); // 不預先建立 → 原本不存在
+        let codex_dir = dir.join("AGENTS.md");
+        std::fs::create_dir_all(&codex_dir).unwrap(); // 第二目標為目錄 → 強制失敗
+        let r = deploy_doctrine_to(source, "C:\\v", &claude, &codex_dir);
+        assert!(r.is_err(), "第二檔寫入失敗應 Err");
+        assert!(!claude.exists(), "第一檔原本不存在 → 回滾應刪除新建檔");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

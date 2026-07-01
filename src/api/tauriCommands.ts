@@ -194,6 +194,13 @@ export interface VaultSetResult {
   pointerAction: 'appended' | 'replaced'
 }
 
+export interface DeployResult {
+  claudePath: string
+  codexPath: string
+  backupMade: boolean
+  warnings: string[]
+}
+
 export interface WikiIngestInput {
   projectId: string
   layer: string
@@ -291,6 +298,7 @@ export const api = {
   getVaultConfig: () => invoke<VaultConfig>('get_vault_config'),
   getVaultStatus: () => invoke<VaultStatus>('get_vault_status'),
   setVaultPath: (path: string) => invoke<VaultSetResult>('set_vault_path', { path }),
+  deployGlobalDoctrine: () => invoke<DeployResult>('deploy_global_doctrine'),
   vaultGitStatus: () => invoke<string>('vault_git_status'),
   vaultGitPull: () => invoke<string>('vault_git_pull'),
   vaultGitSync: (message?: string) => invoke<string>('vault_git_sync', { message: message ?? null }),
