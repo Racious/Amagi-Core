@@ -57,6 +57,8 @@ import { useProjectStore } from '../stores/projectStore'
 import { api, type FileDiffPreview, type SyncResult } from '../api/tauriCommands'
 import DiffPreview from '../components/DiffPreview.vue'
 
+// 註：同步「Amagi-Core 自身」時，寫入其根 AGENTS.md/CLAUDE.md 會被 dev server（vite）監看到而
+// 觸發整頁重載，導致成功訊息瞬間消失——此為 dogfood dev 專屬假象，正式版/同步他專案不會發生。
 const projectStore = useProjectStore()
 const selectedId = ref('')
 const loading = ref(false)
@@ -70,7 +72,12 @@ async function loadPreview() {
   error.value = null
   syncResult.value = null
   try {
-    previews.value = await api.previewSyncDiff(selectedId.value)
+    const all = await api.previewSyncDiff(selectedId.value)
+    // 後端一律回傳受管檔（含無變更者）；前端濾掉「內容與現況相同」的，只列真的會變的，
+    // 避免「同步完再預覽還是一堆東西」的錯覺，也讓「執行同步」在真的無變更時停用。
+    // 換行正規化（CRLF↔LF + 去尾端換行）比對——否則磁碟 CRLF vs app 產生 LF 會被當成差異。
+    const norm = (s: string | null) => (s ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/\n+$/, '')
+    previews.value = all.filter((p) => p.isNewFile || norm(p.currentContent) !== norm(p.newContent))
   } catch (e: any) {
     error.value = e?.message ?? String(e)
   } finally {

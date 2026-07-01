@@ -74,7 +74,7 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
-import { open } from '@tauri-apps/plugin-dialog'
+import { open, ask } from '@tauri-apps/plugin-dialog'
 import { useProjectStore } from '../stores/projectStore'
 import { api } from '../api/tauriCommands'
 
@@ -128,7 +128,7 @@ async function initVault(projectId: string) {
 
 async function removeProject(projectId: string) {
   clearMessages()
-  if (!confirm('確定要移除此專案？（只移除監控，不刪除專案檔案）')) return
+  if (!(await ask('確定要移除此專案？（只移除監控，不刪除專案檔案）', { title: '移除專案', kind: 'warning' }))) return
   try {
     await projectStore.removeProject(projectId)
   } catch (e: any) {

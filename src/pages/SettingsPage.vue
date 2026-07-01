@@ -154,7 +154,7 @@ import { getVersion } from '@tauri-apps/api/app'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useTheme, THEMES } from '../composables/useTheme'
 import { useUpdater } from '../composables/useUpdater'
-import { open } from '@tauri-apps/plugin-dialog'
+import { open, ask } from '@tauri-apps/plugin-dialog'
 import { api } from '../api/tauriCommands'
 
 const settingsStore = useSettingsStore()
@@ -203,7 +203,11 @@ const deployBusy = ref(false)
 async function deployDoctrine() {
   vaultMsg.value = ''
   vaultWarn.value = ''
-  if (!confirm('同步全域 doctrine 會用 vault 的 global-agent-config.md「整檔覆蓋」~/.claude/CLAUDE.md 與 ~/.codex/AGENTS.md（首次保留 .predeploy.bak，每次留 .bak）。確定嗎？')) return
+  const ok = await ask(
+    '將用 vault 的 global-agent-config.md「整檔覆蓋」~/.claude/CLAUDE.md 與 ~/.codex/AGENTS.md。\n首次保留 .predeploy.bak、每次留 .bak，可還原。確定部署？',
+    { title: '同步全域 doctrine', kind: 'warning' }
+  )
+  if (!ok) return
   deployBusy.value = true
   try {
     const r = await api.deployGlobalDoctrine()

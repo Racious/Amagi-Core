@@ -27,7 +27,9 @@ export default defineConfig(async () => ({
       : undefined,
     watch: {
       // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+      // 4. 忽略 app 自己生成的 agent 檔／.amagi 軌跡——否則 dogfood 同步 Amagi-Core 自身目錄時，
+      //    寫出 AGENTS.md/CLAUDE.md 會被 vite 監看到而觸發整頁重載（沖掉同步成功訊息等狀態）。
+      ignored: ["**/src-tauri/**", "**/AGENTS.md", "**/CLAUDE.md", "**/.amagi/**"],
     },
   },
 }));
