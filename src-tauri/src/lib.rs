@@ -71,6 +71,14 @@ pub fn run() {
 
     std::fs::create_dir_all(&data_dir).expect("無法建立 AppData 目錄");
 
+    // vault-first 一次性遷移（adr-005）：清佇列殘留的 Synced 記憶項（會被舊語意復活的幽靈），
+    // 可回滾（queue.premigration.bak）。啟動時執行、冪等（無殘留即 no-op）。
+    if let Ok(n) = core::review_queue::migrate_drop_synced_memory(&data_dir) {
+        if n > 0 {
+            eprintln!("[AMAGI] vault-first 遷移：已清除 {n} 筆殘留 Synced 記憶佇列項（已備份 queue.premigration.bak）");
+        }
+    }
+
     tauri::Builder::default()
         // 單一實例：必須最先註冊。再次啟動時不另開行程，
         // 而是把既有（可能縮在系統匣的）視窗叫回前景。

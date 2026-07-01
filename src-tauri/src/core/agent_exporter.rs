@@ -28,7 +28,7 @@ fn memory_filename(item: &ReviewItem) -> String {
 }
 
 /// 專案 vault_folder 是否安全（相對、各段皆 Normal、首段為 `projects`）。
-/// 孤兒清理是刪檔表面，刪前以此擋 `..`/絕對路徑/非 projects 形式逃逸出 vault（Codex r3 高）。
+/// 寫入/讀取路徑安全閘的第一關：擋 `..`/絕對路徑/非 projects 形式逃逸出 vault（Codex r3 高）。
 fn is_safe_project_vault_folder(vf: &str) -> bool {
     let p = Path::new(vf);
     !vf.is_empty()
@@ -39,7 +39,7 @@ fn is_safe_project_vault_folder(vf: &str) -> bool {
 }
 
 /// 檔名是否像 Amagi 產生的記憶檔（`<slug>-<1..8 ascii 英數>.md`）。
-/// 孤兒清理只刪此格式，避免誤刪同目錄中手放的 `.md`（Codex r3 高）。
+/// vault loader / 寫入只認此格式，忽略同目錄中手放的 `.md`（vault-first 後不再據此刪檔）。
 fn looks_like_memory_file(name: &str) -> bool {
     match name.strip_suffix(".md").and_then(|stem| stem.rfind('-').map(|i| (stem, i))) {
         Some((stem, i)) if i > 0 => {
@@ -50,8 +50,8 @@ fn looks_like_memory_file(name: &str) -> bool {
     }
 }
 
-/// 安全解析專案記憶目錄 `<vault_root>/<vault_folder>/agent/memory`——作為「寫入＋刪除」的**唯一閘**
-/// （Codex r4 高/中：sync 與 promote 兩條路徑都走此 helper，杜絕只封一支）。
+/// 安全解析專案記憶目錄 `<vault_root>/<vault_folder>/agent/memory`——作為**寫入/讀取安全閘**
+/// （sync 寫入 / vault loader 讀取 / promote 皆走此 helper；vault-first 後不再有「以佇列刪 vault 孤兒檔」）。
 /// 回傳 Some(dir) 僅當：① vault_folder 安全（相對/全 Normal/首段 projects）；
 /// ② 該目錄「最深既存祖先」canonical 落在 canonical vault_root 之下（擋 symlink/junction 逃逸）。
 /// 目錄可尚未存在（首次寫入）：對不存在路徑逐層上溯到既存祖先再驗。否則 None（呼叫端 skip/報錯）。
@@ -72,6 +72,29 @@ fn safe_project_memory_dir(vault_root: &Path, vault_folder: &str) -> Option<Path
     };
     // vault_root 已存在 → 要求最深既存祖先落在 canonical vault_root 下（擋 vault 內既存 symlink/junction 逃逸）。
     // vault_root 為 NotFound（首次建立）→ 祖先已成功解析 + vault_folder 乾淨（無 ../絕對）→ 下方皆為待建乾淨段，安全。
+    match vault_root.canonicalize() {
+        Ok(croot) => if canon_ancestor.starts_with(&croot) { Some(mem_dir) } else { None },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(mem_dir),
+        Err(_) => None,
+    }
+}
+
+/// general/shared 跨層記憶目錄安全閘（Codex #4）：與 `safe_project_memory_dir` 同強度。
+/// 限 tier ∈ {general, shared}，且該目錄「最深既存祖先」canonical 後仍落在 canonical vault_root 下
+/// （擋 tier 目錄被 symlink/junction 指向 vault 外而讀/寫外部檔）。目錄可尚未存在（首次寫入）。
+fn safe_tier_memory_dir(vault_root: &Path, tier: &str) -> Option<PathBuf> {
+    if tier != "general" && tier != "shared" {
+        return None;
+    }
+    let mem_dir = vault_root.join(tier).join("agent").join("memory");
+    let mut anc: &Path = mem_dir.as_path();
+    let canon_ancestor = loop {
+        match anc.canonicalize() {
+            Ok(c) => break c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => anc = anc.parent()?,
+            Err(_) => return None,
+        }
+    };
     match vault_root.canonicalize() {
         Ok(croot) => if canon_ancestor.starts_with(&croot) { Some(mem_dir) } else { None },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(mem_dir),
@@ -154,70 +177,39 @@ fn parse_memory_file(raw: &str) -> (String, String, String, Option<chrono::DateT
     (title, category, body, created)
 }
 
-/// 跨機修復（方案①回填）：把「vault 有、本機佇列無」的專案記憶檔回填為佇列項
-/// （Memory/Project/Synced），使 sync 的內聯與孤兒清理（皆以佇列為權威）能涵蓋
-/// 跨機 pull 來的記憶、不誤刪。純函式：只讀 vault、回傳待新增項，**不寫佇列**。
-/// - 去重以「同專案 Memory/Project 佇列項的 memory_filename」比對（含所有 status，
-///   避免把本機已忽略的記憶復活）。
-/// - 回填項 id 取自檔名尾片段，並驗 memory_filename 與既有檔名一致才回填，
-///   確保不寫出重複檔名檔（slug 不一致則保守略過）。
-/// - 安全：走 safe_project_memory_dir 同一閘、只認記憶命名格式、不跟 symlink。
-pub fn reconcile_project_memory_from_vault(
-    vault_root: &Path,
-    vault_folder: &str,
-    project_id: &str,
-    existing: &[ReviewItem],
-) -> Vec<ReviewItem> {
-    let mem_dir = match safe_project_memory_dir(vault_root, vault_folder) {
-        Some(d) if d.is_dir() => d,
-        _ => return Vec::new(),
-    };
-    // 刪除迴圈/讀檔前先取 canonical mem_dir，供「讀後再驗父目錄」防 symlink 競態（Codex 低）。
-    let canon_mem = match std::fs::canonicalize(&mem_dir) { Ok(c) => c, Err(_) => return Vec::new() };
-    // 去重：同專案 Memory/Project 佇列項的檔名（含所有 status，避免復活已忽略項）。
-    let existing_files: std::collections::HashSet<String> = existing.iter()
-        .filter(|i| i.project_id == project_id
-            && i.item_type == ReviewItemType::Memory
-            && i.sync_scope == SyncScope::Project)
-        .map(|i| memory_filename(i))
-        .collect();
-    // id 碰撞守門：回填 id 不可撞任何既有佇列 id（跨 type/scope）或本批已回填 id（Codex 中）。
-    let existing_ids: std::collections::HashSet<&str> =
-        existing.iter().map(|i| i.id.as_str()).collect();
-    let mut backfill_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let rd = match std::fs::read_dir(&mem_dir) { Ok(r) => r, Err(_) => return Vec::new() };
-    let mut backfill = Vec::new();
+/// 讀取一個記憶目錄中「所有合法受管記憶檔」→ ReviewItem（vault-first 權威來源核心）。
+/// 純函式：只讀該目錄、不寫/不刪。格式守門與 reconcile 一致（frontmatter title/category/created
+/// 齊備 + slug 與檔名一致），忽略 MEMORY.md/非受管檔名/非一般檔（symlink），**絕不刪除**。
+/// scope/project_id 留預設，呼叫端視需要覆寫（索引重建僅用到 id/title/content/created）。
+fn read_memory_dir(mem_dir: &Path) -> Vec<ReviewItem> {
+    let canon_mem = match std::fs::canonicalize(mem_dir) { Ok(c) => c, Err(_) => return Vec::new() };
+    let rd = match std::fs::read_dir(mem_dir) { Ok(r) => r, Err(_) => return Vec::new() };
+    let mut out = Vec::new();
     for ent in rd.flatten() {
         let fname = ent.file_name().to_string_lossy().to_string();
         if fname == "MEMORY.md" || !looks_like_memory_file(&fname) { continue; }
-        if existing_files.contains(&fname) { continue; }
-        // 只認一般檔，不跟 symlink（與孤兒清理同調）。
+        // 只認一般檔，不跟 symlink。
         let is_regular = std::fs::symlink_metadata(ent.path())
             .map(|m| m.file_type().is_file()).unwrap_or(false);
         if !is_regular { continue; }
-        // 讀檔前再驗 canonical 父目錄＝mem_dir，防判斷後被換成 symlink 逃逸（Codex 低 TOCTOU）。
+        // 讀檔前驗 canonical 父目錄＝mem_dir，防判斷後被換成 symlink 逃逸（TOCTOU）。
         let parent_ok = std::fs::canonicalize(ent.path()).ok()
             .as_deref().and_then(Path::parent)
             .map(|p| p == canon_mem.as_path()).unwrap_or(false);
         if !parent_ok { continue; }
         let raw = match std::fs::read_to_string(ent.path()) { Ok(s) => s, Err(_) => continue };
         let (title, category, content, created) = parse_memory_file(&raw);
-        // 格式守門（Codex 高）：只回填具備合法 frontmatter 的記憶檔（title/category/created 齊備），
-        // 不補 title、不放寬——避免把手放殘留/惡意 .md 洗白成正式記憶、破壞孤兒清理權威語意。
+        // 格式守門：只認具備合法 frontmatter 的記憶檔，避免把手放殘留/惡意 .md 洗白。
         if title.is_empty() || category.is_empty() || created.is_none() { continue; }
-        // 檔名 = <slug>-<idfrag>.md；idfrag 當回填 id 使 memory_filename 對得回既有檔名。
         let stem = fname.strip_suffix(".md").unwrap_or(&fname);
         let (slug_part, idfrag) = match stem.rfind('-') {
             Some(i) => (&stem[..i], stem[i + 1..].to_string()),
             None => continue,
         };
-        // title slug 須與檔名 slug 段一致（再防洗白 + 確保 memory_filename 對回原檔）。
         if fs_utils::slugify(&title) != slug_part { continue; }
-        // id 碰撞 → 保守略過（不讓 add_items 寫入重複 id，污染以 id 操作的 accept/ignore/mark_synced）。
-        if existing_ids.contains(idfrag.as_str()) || backfill_ids.contains(&idfrag) { continue; }
         let item = ReviewItem {
-            id: idfrag.clone(),
-            project_id: project_id.to_string(),
+            id: idfrag,
+            project_id: String::new(),
             item_type: ReviewItemType::Memory,
             category,
             title,
@@ -230,14 +222,36 @@ pub fn reconcile_project_memory_from_vault(
             created_at: created.unwrap(), // is_none 已於格式守門擋掉
             reviewed_at: None,
         };
-        // 一致性守門：回填項算出的檔名須等於既有檔名，否則 sync 會寫出重複檔 → 保守略過。
+        // 一致性守門：算出的檔名須等於既有檔名（再防洗白 + 確保 memory_filename 對回原檔）。
         if memory_filename(&item) == fname {
-            backfill_ids.insert(idfrag);
-            backfill.push(item);
+            out.push(item);
         }
     }
-    backfill
+    out
 }
+
+/// vault-first：專案記憶權威集（安全閘解析目錄後讀取）。sync 以此重建索引/內聯，取代「佇列全集」。
+pub fn load_project_memory_from_vault(vault_root: &Path, vault_folder: &str) -> Vec<ReviewItem> {
+    match safe_project_memory_dir(vault_root, vault_folder) {
+        Some(d) if d.is_dir() => read_memory_dir(&d),
+        _ => Vec::new(),
+    }
+}
+
+/// vault-first：某跨專案層（general/shared）記憶權威集。走 safe_tier_memory_dir 圍堵閘（Codex #4）。
+fn load_tier_memory_from_vault(vault_root: &Path, tier: &str, scope: SyncScope) -> Vec<ReviewItem> {
+    let dir = match safe_tier_memory_dir(vault_root, tier) {
+        Some(d) if d.is_dir() => d,
+        _ => return Vec::new(),
+    };
+    let mut items = read_memory_dir(&dir);
+    for it in &mut items { it.sync_scope = scope.clone(); }
+    items
+}
+
+// 註：跨機回填 `reconcile_project_memory_from_vault` 已於 vault-first 反轉（[[adr-005-vault-first-sync]]）
+// 退役——sync/preview 改以 `load_project_memory_from_vault` 直接讀 vault 為權威，且已移除
+// 「以佇列集合刪 vault 孤兒檔」的清理，故無跨機誤刪風險，回填補丁不再需要。
 
 /// 由技能清單算出各自 vault `_skills` 落點：slug 合法性守門（空/非法 → skill-<id>）、
 /// 同批同名去重、相容舊扁平 `<slug>.md`。sync 與 preview 共用，確保落點一致。
@@ -290,14 +304,12 @@ pub fn sync_agent_files(
         .unwrap_or_else(|| project_vault_folder(project_path));
 
     // ── 專案層記憶 → vault `<vault_folder>/agent/memory/`；專案 AGENTS/CLAUDE 內聯索引 ──
-    // 收 Accepted+Synced 全部專案記憶寫成「一事一檔」+ 重建 MEMORY.md 索引。
+    // vault-first：只寫入本輪新核可（Accepted）記憶進 vault；索引/內聯改以 vault 現有檔為權威重建。
     // 專案 AGENTS/CLAUDE 內聯本專案記憶索引（非僅指標，實測薄指標不被跟讀）。
     let project_mem: Vec<&ReviewItem> = all_project_memory.iter()
         .filter(|i| i.item_type == ReviewItemType::Memory && i.sync_scope == SyncScope::Project)
         .collect();
     if let Some(vroot) = vault_root {
-        let entries = memory_index_entries(&project_mem);
-
         // 安全閘：以共用 helper 解析記憶目錄（驗 vault_folder + canonical containment）。
         // 寫記憶檔/索引、孤兒清理、專案 AGENTS/CLAUDE 內聯，全部只在安全閘通過後才動（Codex r4/r7）。
         match safe_project_memory_dir(vroot, &vault_folder) {
@@ -311,83 +323,35 @@ pub fn sync_agent_files(
             // 不安全且無專案記憶 → 無可寫/可清，整段跳過（不動 vault、不重寫專案 md）。
             None => {}
             Some(mem_dir) => {
-                // 個別記憶檔：有記憶才寫
-                if !entries.is_empty() {
+                // 1) 寫入新核可（Accepted）的專案記憶進 vault（新記憶入庫）。Synced 已在 vault，
+                //    不重寫（避免復活已被刪的檔）；migration 後佇列本就無 Synced（[[adr-005-vault-first-sync]]）。
+                let new_mem: Vec<&ReviewItem> = project_mem.iter().copied()
+                    .filter(|i| i.status == ReviewStatus::Accepted).collect();
+                if !new_mem.is_empty() {
                     std::fs::create_dir_all(&mem_dir).map_err(|e| AppError::Io(e.to_string()))?;
-                    for (item, entry) in project_mem.iter().zip(&entries) {
-                        let path = mem_dir.join(&entry.0);
-                        // 衍生檔（可由 queue 重建）→ 無備份寫入，避免 agent/memory 累積 .bak 雜物。
+                    for item in &new_mem {
+                        let path = mem_dir.join(memory_filename(item));
+                        // 衍生檔 → 無備份寫入，避免 agent/memory 累積 .bak 雜物。
                         std::fs::write(&path, markdown::build_memory_file(item)).map_err(|e| AppError::Io(e.to_string()))?;
                         written.push(path.to_string_lossy().to_string());
                     }
                 }
-                // MEMORY.md 索引 + 孤兒對帳清理：有記憶、或曾有現空（mem_dir 仍在 → 寫空索引反映「已無」）
+                // 2) vault-first：以 vault 現有檔為權威重建索引/內聯（取代「佇列全集」）。
+                let vault_items = load_project_memory_from_vault(vroot, &vault_folder);
+                let vault_refs: Vec<&ReviewItem> = vault_items.iter().collect();
+                let entries = memory_index_entries(&vault_refs);
+                // MEMORY.md 索引：有記憶、或 mem_dir 已存在（清空重寫反映「已無」）。
+                // vault-first：不再做「以佇列集合刪 vault 孤兒檔」的對帳清理——vault 即真相，
+                // 非受管檔一律忽略、絕不自動刪（[[adr-005-vault-first-sync]]）。
                 if !entries.is_empty() || mem_dir.exists() {
                     std::fs::create_dir_all(&mem_dir).map_err(|e| AppError::Io(e.to_string()))?;
                     let idx_path = mem_dir.join("MEMORY.md");
                     std::fs::write(&idx_path, markdown::build_memory_index(&entries))
                         .map_err(|e| AppError::Io(e.to_string()))?;
                     written.push(idx_path.to_string_lossy().to_string());
-
-                    // 對帳清理：刪「不在權威集」的孤兒記憶檔，使「sync = vault 完全對齊 queue」、孤兒自癒。
-                    // mem_dir 已確認安全；再以「命名格式 + 一般檔」雙保險（agent/memory 為受管目錄，
-                    // 符合記憶命名格式之 .md 視為受管檔）；保留 MEMORY.md，不跟隨 symlink、不碰目錄。
-                    let expected: std::collections::HashSet<&str> =
-                        entries.iter().map(|e| e.0.as_str()).collect();
-                    // TOCTOU 輕量強化（Codex 稽核中）：安全閘驗過 mem_dir 後到此刪除迴圈之間，
-                    // 目錄仍可能被本機競態替換為 symlink/junction。刪前重新 canonicalize：
-                    // ① mem_dir 本身仍須落在 vault 根下；② 每個待刪檔的 canonical 父目錄須等於
-                    // canonical mem_dir。任一校驗失敗 → 回報 warning（非靜默略過），絕不在校驗外刪檔。
-                    let canon_mem = std::fs::canonicalize(&mem_dir).ok();
-                    let mem_within_vault = match (vroot.canonicalize().ok(), canon_mem.as_ref()) {
-                        (Some(vr), Some(md)) => md.starts_with(&vr),
-                        _ => false,
-                    };
-                    if !mem_within_vault {
-                        written.push(format!(
-                            "(略過孤兒清理：記憶目錄 canonical 校驗失敗，疑似 symlink/競態) {}",
-                            mem_dir.to_string_lossy()
-                        ));
-                    } else if let Ok(rd) = std::fs::read_dir(&mem_dir) {
-                        let canon_mem = canon_mem.unwrap(); // mem_within_vault 為真 → 必為 Some
-                        for ent in rd.flatten() {
-                            let fname = ent.file_name();
-                            let fname = fname.to_string_lossy();
-                            if fname == "MEMORY.md" || !looks_like_memory_file(&fname) {
-                                continue;
-                            }
-                            if expected.contains(fname.as_ref()) {
-                                continue;
-                            }
-                            let is_regular = std::fs::symlink_metadata(ent.path())
-                                .map(|m| m.file_type().is_file())
-                                .unwrap_or(false);
-                            if !is_regular {
-                                continue;
-                            }
-                            // 刪前重驗：該檔 canonical 父目錄須正好是 canonical mem_dir。
-                            let parent_ok = std::fs::canonicalize(ent.path())
-                                .ok()
-                                .as_deref()
-                                .and_then(Path::parent)
-                                .map(|p| p == canon_mem.as_path())
-                                .unwrap_or(false);
-                            if !parent_ok {
-                                written.push(format!(
-                                    "(略過清理：路徑校驗失敗，疑似 symlink/競態) {}",
-                                    ent.path().to_string_lossy()
-                                ));
-                                continue;
-                            }
-                            if std::fs::remove_file(ent.path()).is_ok() {
-                                written.push(format!("(清理孤兒) {}", ent.path().to_string_lossy()));
-                            }
-                        }
-                    }
                 }
 
-                // 專案 AGENTS/CLAUDE：與「有無記憶」解耦（空→「（尚無）」），只在安全閘通過後才寫，
-                // 避免在 vault 記憶未實際寫入時還內聯指向不存在的記憶（Codex r7 高）。
+                // 專案 AGENTS/CLAUDE：與「有無記憶」解耦（空→「（尚無）」），以 vault 權威集內聯。
                 let agents_path = Path::new(project_path).join("AGENTS.md");
                 let claude_path = Path::new(project_path).join("CLAUDE.md");
                 if !entries.is_empty() || agents_path.exists() || claude_path.exists() {
@@ -446,10 +410,20 @@ pub fn preview_sync_diff(
         .filter(|i| i.item_type == ReviewItemType::Memory && i.sync_scope == SyncScope::Project)
         .collect();
     if let Some(vroot) = vault_root {
-        let entries = memory_index_entries(&project_mem);
         // 與 sync 共用同一安全閘（Codex r7 中）：vault_folder/祖先不安全 → 不列 vault 記憶與專案 md diff，
         // 避免 preview 顯示一組 sync 實際不會寫（或會 Err）的路徑，維持 preview/sync 一致。
         if let Some(mem_dir) = safe_project_memory_dir(vroot, &vault_folder) {
+            // vault-first：預期 vault 集合 = vault 現有 ∪ 本輪新核可（同檔名以新項為準），
+            // 與 sync（寫新項後以 vault 重建）產出的索引/內聯一致。
+            let new_mem: Vec<&ReviewItem> = project_mem.iter().copied()
+                .filter(|i| i.status == ReviewStatus::Accepted).collect();
+            let new_names: std::collections::HashSet<String> =
+                new_mem.iter().map(|i| memory_filename(i)).collect();
+            let vault_items = load_project_memory_from_vault(vroot, &vault_folder);
+            let mut expected: Vec<&ReviewItem> = vault_items.iter()
+                .filter(|it| !new_names.contains(&memory_filename(it))).collect();
+            expected.extend(new_mem.iter().copied());
+            let entries = memory_index_entries(&expected);
             let bullets = markdown::memory_bullets(&entries);
 
             // AGENTS/CLAUDE：entries 非空、或檔已存在 → 會被重寫（空→「（尚無）」）
@@ -469,9 +443,9 @@ pub fn preview_sync_diff(
                     file_path: claude_path.to_string_lossy().to_string(),
                 });
             }
-            // 個別記憶檔：僅非空才寫
-            for (item, entry) in project_mem.iter().zip(&entries) {
-                let path = mem_dir.join(&entry.0);
+            // 個別記憶檔：本輪新核可項（會實際寫入 vault）
+            for item in &new_mem {
+                let path = mem_dir.join(memory_filename(item));
                 previews.push(FileDiffPreview {
                     current_content: std::fs::read_to_string(&path).ok(),
                     new_content: markdown::build_memory_file(item),
@@ -520,41 +494,67 @@ pub fn preview_sync_diff(
 /// 寫某個「跨專案 scope」記憶到 vault `<tier>/agent/memory/`（general=Global、shared=Shared）。
 /// 跨專案全集 → 一事一檔 + 重建索引；複用專案記憶的 helper。
 fn sync_tier_memory(vault_root: &Path, memory: &[ReviewItem], scope: SyncScope, tier: &str) -> Result<Vec<String>, AppError> {
-    let mems: Vec<&ReviewItem> = memory.iter()
-        .filter(|i| i.item_type == ReviewItemType::Memory && i.sync_scope == scope)
-        .collect();
-    if mems.is_empty() {
-        return Ok(Vec::new());
-    }
-    let mem_dir = vault_root.join(tier).join("agent").join("memory");
-    std::fs::create_dir_all(&mem_dir).map_err(|e| AppError::Io(e.to_string()))?;
     let mut written = Vec::new();
-    let entries = memory_index_entries(&mems);
-    for (item, entry) in mems.iter().zip(&entries) {
-        let path = mem_dir.join(&entry.0);
-        // 衍生檔（可由 queue 重建）→ 無備份寫入，避免 agent/memory 累積 .bak 雜物。
-        std::fs::write(&path, markdown::build_memory_file(item)).map_err(|e| AppError::Io(e.to_string()))?;
-        written.push(path.to_string_lossy().to_string());
+    // 1) 寫入新核可（Accepted）的跨層記憶進 vault。Synced 已在 vault，不重寫（避免復活已刪的檔）。
+    let new_mems: Vec<&ReviewItem> = memory.iter()
+        .filter(|i| i.item_type == ReviewItemType::Memory
+            && i.sync_scope == scope
+            && i.status == ReviewStatus::Accepted)
+        .collect();
+    // 安全閘（Codex #4）：tier 目錄不安全時，有待寫記憶 → Err（不靜默跳過寫入卻讓外層出列）；無則略過。
+    let mem_dir = match safe_tier_memory_dir(vault_root, tier) {
+        Some(d) => d,
+        None => {
+            if new_mems.is_empty() { return Ok(Vec::new()); }
+            return Err(AppError::InvalidPath(format!("不安全的 {tier} 記憶目錄，拒絕寫入跨層記憶")));
+        }
+    };
+    if !new_mems.is_empty() {
+        std::fs::create_dir_all(&mem_dir).map_err(|e| AppError::Io(e.to_string()))?;
+        for item in &new_mems {
+            let path = mem_dir.join(memory_filename(item));
+            std::fs::write(&path, markdown::build_memory_file(item)).map_err(|e| AppError::Io(e.to_string()))?;
+            written.push(path.to_string_lossy().to_string());
+        }
     }
-    let idx_path = mem_dir.join("MEMORY.md");
-    std::fs::write(&idx_path, markdown::build_memory_index(&entries))
-        .map_err(|e| AppError::Io(e.to_string()))?;
-    written.push(idx_path.to_string_lossy().to_string());
+    // 2) vault-first：以 vault 現有檔為權威重建索引（取代「佇列全集」）。
+    //    空集合但 mem_dir 已存在 → 寫空索引反映「已無」（三層語意與 project 一致）。
+    let vault_items = load_tier_memory_from_vault(vault_root, tier, scope);
+    let refs: Vec<&ReviewItem> = vault_items.iter().collect();
+    let entries = memory_index_entries(&refs);
+    if !entries.is_empty() || mem_dir.exists() {
+        std::fs::create_dir_all(&mem_dir).map_err(|e| AppError::Io(e.to_string()))?;
+        let idx_path = mem_dir.join("MEMORY.md");
+        std::fs::write(&idx_path, markdown::build_memory_index(&entries))
+            .map_err(|e| AppError::Io(e.to_string()))?;
+        written.push(idx_path.to_string_lossy().to_string());
+    }
     Ok(written)
 }
 
 fn preview_tier_memory(vault_root: &Path, memory: &[ReviewItem], scope: SyncScope, tier: &str) -> Vec<FileDiffPreview> {
-    let mems: Vec<&ReviewItem> = memory.iter()
-        .filter(|i| i.item_type == ReviewItemType::Memory && i.sync_scope == scope)
+    // 安全閘（Codex #4）：與 sync_tier_memory 共用；不安全 tier 目錄 → 不列 diff（維持 preview/sync 一致）。
+    let mem_dir = match safe_tier_memory_dir(vault_root, tier) {
+        Some(d) => d,
+        None => return Vec::new(),
+    };
+    // vault-first：預期集合 = vault 現有 ∪ 本輪新核可（同檔名以新項為準），與 sync_tier_memory 一致。
+    let new_mems: Vec<&ReviewItem> = memory.iter()
+        .filter(|i| i.item_type == ReviewItemType::Memory
+            && i.sync_scope == scope
+            && i.status == ReviewStatus::Accepted)
         .collect();
-    if mems.is_empty() {
-        return Vec::new();
-    }
-    let mem_dir = vault_root.join(tier).join("agent").join("memory");
-    let entries = memory_index_entries(&mems);
+    let new_names: std::collections::HashSet<String> =
+        new_mems.iter().map(|i| memory_filename(i)).collect();
+    let vault_items = load_tier_memory_from_vault(vault_root, tier, scope);
+    let mut expected: Vec<&ReviewItem> = vault_items.iter()
+        .filter(|it| !new_names.contains(&memory_filename(it))).collect();
+    expected.extend(new_mems.iter().copied());
+    let entries = memory_index_entries(&expected);
     let mut previews = Vec::new();
-    for (item, entry) in mems.iter().zip(&entries) {
-        let path = mem_dir.join(&entry.0);
+    // 個別記憶檔：本輪新核可項（會實際寫入 vault）
+    for item in &new_mems {
+        let path = mem_dir.join(memory_filename(item));
         previews.push(FileDiffPreview {
             current_content: std::fs::read_to_string(&path).ok(),
             new_content: markdown::build_memory_file(item),
@@ -562,13 +562,16 @@ fn preview_tier_memory(vault_root: &Path, memory: &[ReviewItem], scope: SyncScop
             file_path: path.to_string_lossy().to_string(),
         });
     }
-    let idx_path = mem_dir.join("MEMORY.md");
-    previews.push(FileDiffPreview {
-        current_content: std::fs::read_to_string(&idx_path).ok(),
-        new_content: markdown::build_memory_index(&entries),
-        is_new_file: !idx_path.exists(),
-        file_path: idx_path.to_string_lossy().to_string(),
-    });
+    // MEMORY.md 索引：有記憶、或 mem_dir 已存在（清空重寫）→ 預覽
+    if !entries.is_empty() || mem_dir.exists() {
+        let idx_path = mem_dir.join("MEMORY.md");
+        previews.push(FileDiffPreview {
+            current_content: std::fs::read_to_string(&idx_path).ok(),
+            new_content: markdown::build_memory_index(&entries),
+            is_new_file: !idx_path.exists(),
+            file_path: idx_path.to_string_lossy().to_string(),
+        });
+    }
     previews
 }
 
@@ -588,6 +591,8 @@ pub fn preview_shared_memory(vault_root: &Path, memory: &[ReviewItem]) -> Vec<Fi
 }
 
 /// 升級（Phase 3b-2）：把一筆專案記憶移到 shared/agent/memory。
+/// ⚠️ 註：promote 仍為 queue-first（呼叫端先定案 queue、再讓 vault 對齊），屬 **Phase 3 待改**（spec §9），
+/// 尚未納入本輪 vault-first 反轉範圍。
 /// 1) 刪舊 `projects/<vf>/agent/memory/<該筆>` + 以剩餘專案記憶重建該專案索引（清孤兒）；
 /// 2) 把 Shared 全集寫進 `shared/agent/memory/`（呼叫端以該筆的 Shared 版本含於 all_shared；
 ///    queue 的 scope/status 由呼叫端在本函式 I/O 成功後才更新，失敗則維持原狀可重試）。
@@ -676,129 +681,88 @@ mod tests {
     }
 
     #[test]
-    fn test_sync_cleans_orphan_project_memory_but_spares_others() {
-        let root = std::env::temp_dir().join(format!("amagi-orphan-{}", uuid::Uuid::new_v4()));
+    fn test_sync_vault_first_ignores_nonmanaged_files() {
+        // vault-first：sync 不再「以佇列集合刪 vault 孤兒檔」。非受管/無合法 frontmatter 的檔
+        // 一律忽略（不載入索引、也絕不刪除）；真記憶正常寫入並索引。
+        let root = std::env::temp_dir().join(format!("amagi-vf-ignore-{}", uuid::Uuid::new_v4()));
         let vault = root.join("vault");
         let proj = root.join("proj");
         std::fs::create_dir_all(&proj).unwrap();
         let vf = "projects/p";
         let mem_dir = vault.join(vf).join("agent").join("memory");
         std::fs::create_dir_all(&mem_dir).unwrap();
-        // 植入：孤兒記憶檔(記憶格式 .md)、非 .md 檔、非記憶格式的 .md
-        std::fs::write(mem_dir.join("orphan-deadbeef.md"), "孤兒殘留").unwrap();
-        std::fs::write(mem_dir.join("keep.txt"), "非 md，不可動").unwrap();
-        std::fs::write(mem_dir.join("notes.md"), "手放筆記，非記憶格式，不可動").unwrap();
+        // 像記憶檔名但無 frontmatter、非 .md、非記憶格式 .md
+        std::fs::write(mem_dir.join("orphan-deadbeef.md"), "純文字殘留，無 frontmatter").unwrap();
+        std::fs::write(mem_dir.join("keep.txt"), "非 md").unwrap();
+        std::fs::write(mem_dir.join("notes.md"), "手放筆記，非記憶格式").unwrap();
 
         let m = mem("real1", "真記憶", SyncScope::Project);
         sync_agent_files(proj.to_str().unwrap(), Some(vf), Some(&vault), &[], std::slice::from_ref(&m)).unwrap();
 
-        // 真記憶檔在、MEMORY.md 在
+        // 真記憶寫入 + 索引重建（含真記憶）
         assert!(mem_dir.join(memory_filename(&m)).is_file(), "真記憶檔應寫入");
-        assert!(mem_dir.join("MEMORY.md").is_file(), "索引應重建");
-        // 記憶格式的孤兒被清
-        assert!(!mem_dir.join("orphan-deadbeef.md").exists(), "記憶格式孤兒應被對帳清理");
-        // 非 .md、非記憶格式 .md、MEMORY.md 不受影響
+        let idx = std::fs::read_to_string(mem_dir.join("MEMORY.md")).unwrap();
+        assert!(idx.contains("真記憶"), "索引應含真記憶");
+        // vault-first：非受管檔一律保留、絕不刪除
+        assert!(mem_dir.join("orphan-deadbeef.md").exists(), "無 frontmatter 檔應被忽略、不刪");
         assert!(mem_dir.join("keep.txt").exists(), "非 .md 檔不可被刪");
-        assert!(mem_dir.join("notes.md").exists(), "非記憶格式 .md（手放）不可被刪");
+        assert!(mem_dir.join("notes.md").exists(), "非記憶格式 .md 不可被刪");
+        // 非受管檔不得混入索引
+        assert!(!idx.contains("純文字殘留"), "非受管檔不得進索引");
 
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    // ── 方案①跨機回填 reconcile ──────────────────────────────
+    // ── vault-first loader 與反轉回歸 ──────────────────────────
     #[test]
-    fn test_reconcile_backfills_vault_only_memory() {
-        let root = std::env::temp_dir().join(format!("amagi-recon-{}", uuid::Uuid::new_v4()));
+    fn test_load_project_memory_from_vault_skips_invalid() {
+        let root = std::env::temp_dir().join(format!("amagi-load-{}", uuid::Uuid::new_v4()));
         let vault = root.join("vault");
         let vf = "projects/p";
         let mem_dir = vault.join(vf).join("agent").join("memory");
         std::fs::create_dir_all(&mem_dir).unwrap();
-        // 模擬跨機 pull 來的記憶檔（標準格式），佇列空
-        let m = mem("deadbeef", "跨機來的記憶", SyncScope::Project);
-        let fname = memory_filename(&m);
-        std::fs::write(mem_dir.join(&fname), markdown::build_memory_file(&m)).unwrap();
-
-        let backfill = reconcile_project_memory_from_vault(&vault, vf, "p", &[]);
-        assert_eq!(backfill.len(), 1, "vault 有、佇列無 → 應回填");
-        let b = &backfill[0];
-        assert_eq!(b.title, "跨機來的記憶");
-        assert_eq!(b.content, "內容一");
-        assert_eq!(b.item_type, ReviewItemType::Memory);
-        assert_eq!(b.sync_scope, SyncScope::Project);
-        assert_eq!(b.status, ReviewStatus::Synced);
-        assert_eq!(b.project_id, "p");
-        assert_eq!(memory_filename(b), fname, "回填項檔名須對回既有檔，不產生重複");
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn test_reconcile_dedups_and_respects_ignored() {
-        let root = std::env::temp_dir().join(format!("amagi-recon2-{}", uuid::Uuid::new_v4()));
-        let vault = root.join("vault");
-        let vf = "projects/p";
-        let mem_dir = vault.join(vf).join("agent").join("memory");
-        std::fs::create_dir_all(&mem_dir).unwrap();
-        let m = mem("deadbeef", "已在佇列", SyncScope::Project);
+        // 合法記憶檔
+        let m = mem("deadbeef", "合法記憶", SyncScope::Project);
         std::fs::write(mem_dir.join(memory_filename(&m)), markdown::build_memory_file(&m)).unwrap();
-        // 佇列已有對應項，即使狀態為 Ignored → 不回填、不復活
-        let mut ignored = m.clone();
-        ignored.status = ReviewStatus::Ignored;
-        let backfill = reconcile_project_memory_from_vault(&vault, vf, "p", std::slice::from_ref(&ignored));
-        assert!(backfill.is_empty(), "佇列已有同檔名項（含 Ignored）→ 不回填、不復活");
+        // 無 frontmatter、缺 created、非記憶格式檔名 → 皆不得載入
+        std::fs::write(mem_dir.join("orphan-deadbee1.md"), "純文字，無 frontmatter").unwrap();
+        std::fs::write(mem_dir.join("partial-cafebabe.md"), "---\ntitle: x\ncategory: y\n---\n內容").unwrap();
+        std::fs::write(mem_dir.join("notes.md"), "手放筆記，非記憶格式").unwrap();
+
+        let loaded = load_project_memory_from_vault(&vault, vf);
+        assert_eq!(loaded.len(), 1, "只應載入合法記憶檔");
+        assert_eq!(loaded[0].title, "合法記憶");
+        assert_eq!(loaded[0].content, "內容一");
+        assert_eq!(memory_filename(&loaded[0]), memory_filename(&m), "檔名須對回原檔");
         let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
-    fn test_reconcile_then_sync_spares_cross_machine_memory() {
-        let root = std::env::temp_dir().join(format!("amagi-recon3-{}", uuid::Uuid::new_v4()));
+    fn test_sync_vault_first_no_revive_after_vault_delete() {
+        // 反轉核心回歸：vault 端刪除記憶檔後，sync（佇列無該項）不得復活它，索引/CLAUDE 不含它。
+        let root = std::env::temp_dir().join(format!("amagi-vf-norevive-{}", uuid::Uuid::new_v4()));
         let vault = root.join("vault");
         let proj = root.join("proj");
         let vf = "projects/p";
         let mem_dir = vault.join(vf).join("agent").join("memory");
         std::fs::create_dir_all(&mem_dir).unwrap();
         std::fs::create_dir_all(&proj).unwrap();
-        // 跨機記憶檔在 vault、佇列無
-        let crossm = mem("deadbeef", "跨機記憶", SyncScope::Project);
-        let fname = memory_filename(&crossm);
-        std::fs::write(mem_dir.join(&fname), markdown::build_memory_file(&crossm)).unwrap();
-        // 回填後併入 all_project_memory → sync 不應把它當孤兒刪、且專案 CLAUDE.md 內聯它
-        let backfill = reconcile_project_memory_from_vault(&vault, vf, "p", &[]);
-        sync_agent_files(proj.to_str().unwrap(), Some(vf), Some(&vault), &[], &backfill).unwrap();
-        assert!(mem_dir.join(&fname).is_file(), "回填後 sync 應保留跨機記憶、不誤刪");
-        let claude = std::fs::read_to_string(proj.join("CLAUDE.md")).unwrap();
-        assert!(claude.contains("跨機記憶"), "專案 CLAUDE.md 應內聯回填的跨機記憶");
-        let _ = std::fs::remove_dir_all(&root);
-    }
 
-    #[test]
-    fn test_reconcile_skips_non_memory_format_files() {
-        let root = std::env::temp_dir().join(format!("amagi-recon4-{}", uuid::Uuid::new_v4()));
-        let vault = root.join("vault");
-        let vf = "projects/p";
-        let mem_dir = vault.join(vf).join("agent").join("memory");
-        std::fs::create_dir_all(&mem_dir).unwrap();
-        // 像記憶檔名、但無合法 frontmatter（手放殘留/惡意文字）
-        std::fs::write(mem_dir.join("orphan-deadbeef.md"), "純文字殘留，無 frontmatter").unwrap();
-        // 有 frontmatter 但缺 created
-        std::fs::write(mem_dir.join("partial-cafebabe.md"), "---\ntitle: x\ncategory: y\n---\n內容").unwrap();
-        let backfill = reconcile_project_memory_from_vault(&vault, vf, "p", &[]);
-        assert!(backfill.is_empty(), "無合法 frontmatter（缺 ---/title/category/created）的檔不可被回填洗白");
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn test_reconcile_skips_on_id_collision() {
-        let root = std::env::temp_dir().join(format!("amagi-recon5-{}", uuid::Uuid::new_v4()));
-        let vault = root.join("vault");
-        let vf = "projects/p";
-        let mem_dir = vault.join(vf).join("agent").join("memory");
-        std::fs::create_dir_all(&mem_dir).unwrap();
-        let m = mem("deadbeef", "跨機記憶", SyncScope::Project);
+        // 情境一：vault 有一筆記憶、佇列空 → sync 以 vault 為權威內聯它。
+        let m = mem("deadbeef", "既有記憶", SyncScope::Project);
         std::fs::write(mem_dir.join(memory_filename(&m)), markdown::build_memory_file(&m)).unwrap();
-        // 既有佇列有「不同檔名但 id=deadbeef」的他項 → 回填 id 會撞 → 保守略過
-        let other = mem("deadbeef", "別的東西在別專案", SyncScope::Project);
-        let mut other = other; other.project_id = "q".into();
-        let backfill = reconcile_project_memory_from_vault(&vault, vf, "p", std::slice::from_ref(&other));
-        assert!(backfill.is_empty(), "回填 id 撞既有佇列 id → 應保守略過，不寫重複 id");
+        sync_agent_files(proj.to_str().unwrap(), Some(vf), Some(&vault), &[], &[]).unwrap();
+        let claude1 = std::fs::read_to_string(proj.join("CLAUDE.md")).unwrap();
+        assert!(claude1.contains("既有記憶"), "vault-first：sync 應以 vault 為權威內聯既有記憶");
+
+        // 情境二：刪 vault 檔 → 再 sync（佇列仍空）→ 不得復活、索引/CLAUDE 不含它。
+        std::fs::remove_file(mem_dir.join(memory_filename(&m))).unwrap();
+        sync_agent_files(proj.to_str().unwrap(), Some(vf), Some(&vault), &[], &[]).unwrap();
+        assert!(!mem_dir.join(memory_filename(&m)).exists(), "vault 檔刪除後不得被 sync 復活");
+        let idx = std::fs::read_to_string(mem_dir.join("MEMORY.md")).unwrap();
+        assert!(!idx.contains("既有記憶"), "索引不得含已刪記憶");
+        let claude2 = std::fs::read_to_string(proj.join("CLAUDE.md")).unwrap();
+        assert!(!claude2.contains("既有記憶"), "CLAUDE 內聯不得含已刪記憶");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -897,10 +861,12 @@ mod tests {
             p.contains("/general/agent/memory/") && p.ends_with(".md") && !p.ends_with("MEMORY.md")
         }), "應寫個別全域記憶檔");
 
-        // Project scope 不被 sync_global_memory 處理
+        // Project scope 不被 sync_global_memory 當作 general 記憶寫入（general 仍只有 g1）
         let p = mem("p1", "專案記憶", SyncScope::Project);
-        assert!(sync_global_memory(&vault, std::slice::from_ref(&p)).unwrap().is_empty(),
-            "Project scope 不該被 sync_global_memory 寫入");
+        sync_global_memory(&vault, std::slice::from_ref(&p)).unwrap();
+        let p_as_global = mem("p1", "專案記憶", SyncScope::Global); // 僅用來算 p1 的檔名（與 scope 無關）
+        assert!(!vault.join("general/agent/memory").join(memory_filename(&p_as_global)).exists(),
+            "Project scope 記憶不該被寫入 general");
 
         let _ = std::fs::remove_dir_all(&root);
     }

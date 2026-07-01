@@ -32,20 +32,9 @@ pub async fn sync_agent_files(
     let project = project_manager::get_project(&project_id, &data_dir)
         .ok_or_else(|| AppError::ProjectNotFound(project_id.clone()))?;
 
-    // 方案①跨機回填：sync 前把「vault 有、本機佇列無」的專案記憶補進佇列，
-    // 使後續內聯與孤兒清理（皆以佇列為權威）涵蓋跨機 pull 來的記憶、不誤刪。
-    if let Some(vroot) = vault_manager::get_vault_config(&data_dir).vault_path {
-        let vf = project.vault_folder.clone()
-            .unwrap_or_else(|| agent_exporter::project_vault_folder(&project.path));
-        // 全佇列：id 碰撞守門需涵蓋跨專案/型別；去重 filter 內已限本專案，傳全佇列不影響去重語意。
-        let existing = review_queue::list_items(&data_dir, None);
-        let backfill = agent_exporter::reconcile_project_memory_from_vault(
-            std::path::Path::new(&vroot), &vf, &project_id, &existing);
-        if !backfill.is_empty() {
-            review_queue::add_items(&data_dir, backfill)?;
-        }
-    }
-
+    // vault-first（[[adr-005-vault-first-sync]]）：不再做「vault→佇列回填」。
+    // 內聯/索引改由 agent_exporter 直接讀 vault 為權威（load_*_from_vault），
+    // 且已移除「以佇列集合刪 vault 孤兒檔」的清理 → 無跨機誤刪風險，故回填 reconcile 退役。
     let all_items = review_queue::list_items(&data_dir, Some(&project_id));
     let accepted: Vec<ReviewItem> = all_items.iter()
         .filter(|i| i.status == ReviewStatus::Accepted)
@@ -107,25 +96,45 @@ pub async fn sync_agent_files(
     // 內聯索引自動刷新：把更新後的 general/shared 記憶索引重寫進全域錨點，
     // 使新對話開場即讀到最新（不必手動重設 vault）。失敗不回滾已完成的同步，
     // 但須讓使用者「看得到」錨點未刷新（Codex 中 #2）——否則記憶標 Synced 卻讀不到。
+    // 記錄全域錨點是否刷新成功（Codex #1）：跨層記憶（general/shared）的衍生物＝全域錨點，
+    // 刷新失敗則其記憶不出列、留 Accepted 可重試，符合狀態機「寫 vault + 衍生物刷新成功後才出列」。
+    let mut anchor_ok = true;
     if vault_root.is_some() {
         if let Err(e) = vault_manager::refresh_global_anchor(&data_dir) {
+            anchor_ok = false;
             result.skipped_files.push(format!(
-                "⚠ 全域錨點刷新失敗（{e}）：記憶已寫入 vault，但 ~/.claude/CLAUDE.md／~/.codex/AGENTS.md 未更新，新對話可能讀到舊索引；請到「設定」重設一次 vault 路徑。"
+                "⚠ 全域錨點刷新失敗（{e}）：記憶已寫入 vault，但 ~/.claude/CLAUDE.md／~/.codex/AGENTS.md 未更新，新對話可能讀到舊索引；跨層記憶保留於佇列待重試，請到「設定」重設一次 vault 路徑或再同步一次。"
             ));
         }
     }
 
-    // ── 同步完成後標記為 Synced ───────────────────────
-    // 跨專案記憶已有 vault 落點 → 全部 accepted + 實際寫入的跨專案 Accepted 記憶皆標 Synced
-    let mut synced_ids: Vec<String> = accepted.iter().map(|i| i.id.clone()).collect();
-    if vault_root.is_some() {
+    // ── 同步完成後：記憶「出列」、技能維持 Synced ───────────────────────
+    // vault-first（[[adr-005-vault-first-sync]]）：記憶成功寫入 vault 後從佇列**移除**（出列），
+    // 不再標 Synced 長留——vault 為唯一權威，杜絕「vault 端刪除被佇列全集復活」的幽靈。
+    // 專案記憶：其衍生物（專案 AGENTS/CLAUDE）已於 agent_exporter 寫入成功（否則 `?` 提早返回）→ 照常出列。
+    // 跨層記憶（Global/Shared）：其衍生物＝全域錨點，僅在 anchor_ok 時出列，否則留 Accepted 可重試（Codex #1）。
+    // 技能/wiki 本輪維持現狀（Phase 1 暫存債，spec §7）→ 仍標 Synced。
+    let mut memory_done: Vec<String> = accepted.iter()
+        .filter(|i| i.item_type == ReviewItemType::Memory && i.sync_scope == SyncScope::Project)
+        .map(|i| i.id.clone())
+        .collect();
+    if vault_root.is_some() && anchor_ok {
         for g in &all_cross_memory {
-            if g.status == ReviewStatus::Accepted && !synced_ids.contains(&g.id) {
-                synced_ids.push(g.id.clone());
+            if g.status == ReviewStatus::Accepted && !memory_done.contains(&g.id) {
+                memory_done.push(g.id.clone());
             }
         }
     }
-    review_queue::mark_synced(&data_dir, &synced_ids)?;
+    if !memory_done.is_empty() {
+        review_queue::remove_memory_items(&data_dir, &memory_done)?;
+    }
+    let skill_done: Vec<String> = accepted.iter()
+        .filter(|i| i.item_type != ReviewItemType::Memory)
+        .map(|i| i.id.clone())
+        .collect();
+    if !skill_done.is_empty() {
+        review_queue::mark_synced(&data_dir, &skill_done)?;
+    }
 
     // ── 歸檔已同步的 pending 技能檔 ──────────────────
     let history_dir = std::path::Path::new(&project.path).join(".amagi").join("history");
@@ -180,16 +189,8 @@ pub async fn preview_sync_diff(
     }
 
     let vault_root_path = vault_root.as_deref().map(std::path::Path::new);
-    // 預覽也反映跨機回填（不寫佇列，僅併入計算，使預覽與實際 sync 一致）。
-    let mut all_project_memory = all_project_memory;
-    if let Some(vroot) = vault_root_path {
-        let vf = project.vault_folder.clone()
-            .unwrap_or_else(|| agent_exporter::project_vault_folder(&project.path));
-        // 全佇列供 id 碰撞守門（跨專案）；去重 filter 內已限本專案。
-        let queue_all = review_queue::list_items(&data_dir, None);
-        all_project_memory.extend(
-            agent_exporter::reconcile_project_memory_from_vault(vroot, &vf, &project_id, &queue_all));
-    }
+    // vault-first（[[adr-005-vault-first-sync]]）：preview 與 sync 同源，直接以 vault 現有檔為權威
+    // （agent_exporter 內部 load_*_from_vault），不再回填佇列。
     let mut previews = agent_exporter::preview_sync_diff(
         &project.path,
         project.vault_folder.as_deref(),
@@ -248,13 +249,13 @@ pub async fn promote_memory(item_id: String, state: State<'_, AppState>) -> Resu
     promoted_shared.sync_scope = SyncScope::Shared;
     all_shared.push(promoted_shared);
 
-    // queue-first：先把登記簿定案（scope→Shared 且 Synced，原子單次寫入，無中間態）。
-    // queue 是真相來源，sync 本就「讓 vault 對齊 queue」，故先定案、再讓 vault 對齊；
-    // 即使後續 vault 對齊失敗，queue 已說共用 → 按「同步」或下次 sync 自癒、且不重複。
+    // ⚠️ Phase 3 legacy（queue-first）：promote 尚未納入 vault-first 反轉（spec §9 待改），
+    // 仍走「先定案 queue（scope→Shared 且 Synced，原子單次寫入）、再讓 vault 對齊」。
+    // 此為 promote 專屬 legacy 路徑，**不代表一般 sync 的權威**（一般 sync 已 vault-first）。
     review_queue::promote_scope_and_mark_synced(&data_dir, &item_id)?;
 
-    // 讓 vault 對齊 queue（冪等：移舊專案檔[存在才刪] + 重建索引 + 寫 shared 全集）。
-    // 失敗時 queue 已是共用 → 回明確訊息引導按「同步」校正（sync 會對齊、不重複）。
+    // 讓 vault 對齊此 promote 定案（冪等：移舊專案檔[存在才刪] + 重建索引 + 寫 shared 全集）。
+    // 失敗時回明確訊息引導重試 promote（此 legacy 路徑冪等、不重複）。
     if let Err(e) = agent_exporter::promote_memory_to_shared(
         std::path::Path::new(&vault_root),
         &vault_folder,
@@ -263,7 +264,7 @@ pub async fn promote_memory(item_id: String, state: State<'_, AppState>) -> Resu
         &all_shared,
     ) {
         return Err(AppError::Io(format!(
-            "已標記為共用，但檔案搬移未完成（{e}）。請按「同步」校正——系統會照登記簿把檔案補到位、不會重複。"
+            "已標記為共用，但檔案搬移未完成（{e}）。請再次執行「升級為共用」重試——此步驟冪等、不會重複（promote 為 Phase 3 legacy 流程）。"
         )));
     }
 
