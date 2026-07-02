@@ -1,0 +1,4 @@
+# AMAGI Core 生成的 agent 入口檔以 LF 儲存＋簽出，避免「生成器產 LF、Windows autocrlf 轉 CRLF」
+# 造成每次同步都顯示 modified 的 churn。
+AGENTS.md text eol=lf
+CLAUDE.md text eol=lf
