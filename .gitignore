@@ -48,3 +48,9 @@ AMAGI_Core_*_portable.exe
 *.njsproj
 *.sln
 *.sw?
+
+# AMAGI Core 派生物（本地軌跡/受管副本/生成檔，不進版控——皆可由 vault + 生成器重建）
+.amagi/
+*.bak
+/AGENTS.md
+/CLAUDE.md
