@@ -390,6 +390,71 @@ const AFTER_TASK_REVIEW_TEMPLATE: &str = r#"# After Task Review（任務完成�
 // 生成（指針＋記憶內聯＋工作流薄錨），init 與 sync 共用同一來源，杜絕「init 寫豐富版、
 // sync 用薄版覆寫」的分歧。開發工作流 doctrine 全文置於全域錨點（~/.claude、~/.codex）。
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::project::Project;
+
+    fn make_project(root: &Path) -> Project {
+        Project {
+            id: "test-id".to_string(),
+            name: "test-project".to_string(),
+            path: root.to_string_lossy().to_string(),
+            created_at: Utc::now(),
+            last_scanned_at: None,
+            initialized: false,
+            vault_folder: Some("projects/test-project".to_string()),
+        }
+    }
+
+    #[test]
+    fn test_pending_without_config_is_not_initialized() {
+        // agent 在 init 前自建 .amagi/pending/ 草稿，不得誤判為已初始化
+        let root = std::env::temp_dir().join(format!("amagi-initjudge-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(root.join(".amagi").join("pending")).unwrap();
+        std::fs::write(root.join(".amagi").join("pending").join("skill-draft.md"), "draft").unwrap();
+
+        let info = get_project_info(&make_project(&root));
+        assert!(!info.initialized, "只有 .amagi/pending/ 而無 config.json，應視為未初始化");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn test_init_project_marks_initialized() {
+        let root = std::env::temp_dir().join(format!("amagi-initdone-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let project = make_project(&root);
+
+        assert!(!get_project_info(&project).initialized);
+        init_project(&project).unwrap();
+        assert!(get_project_info(&project).initialized, "init_project 後 config.json 存在，應視為已初始化");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn test_init_project_idempotent_fills_missing_keeps_existing() {
+        // 先有 agent 自建的 pending 草稿：init 應補齊骨架、不動既有內容；重跑無新產物
+        let root = std::env::temp_dir().join(format!("amagi-initidem-{}", Uuid::new_v4()));
+        let draft = root.join(".amagi").join("pending").join("skill-draft.md");
+        std::fs::create_dir_all(draft.parent().unwrap()).unwrap();
+        std::fs::write(&draft, "既有草稿內容").unwrap();
+        let project = make_project(&root);
+
+        let first = init_project(&project).unwrap();
+        assert!(root.join(".amagi").join("config.json").is_file());
+        assert!(!first.created_dirs.iter().any(|d| d.ends_with("pending")), "既有 pending 目錄不應重建");
+        assert_eq!(std::fs::read_to_string(&draft).unwrap(), "既有草稿內容", "init 不得覆寫既有草稿");
+
+        let second = init_project(&project).unwrap();
+        assert!(second.created_dirs.is_empty(), "重跑 init 不應再建目錄");
+        assert!(second.created_files.is_empty(), "重跑 init 不應再建檔案");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+}
+
 pub fn get_project_info(project: &Project) -> ProjectInfo {
     let branch = crate::utils::proc::command("git")
         .args(["branch", "--show-current"])
@@ -406,7 +471,9 @@ pub fn get_project_info(project: &Project) -> ProjectInfo {
         path: project.path.clone(),
         is_git_repo: fs_utils::is_git_repo(&project.path),
         current_branch: branch,
-        initialized: Path::new(&project.path).join(".amagi").exists(),
+        // 以 init 專屬產物 config.json 判定；agent 可能先自建 .amagi/pending/ 草稿，
+        // 只看 .amagi/ 目錄會誤判已初始化（init_project 本身冪等，重跑安全）
+        initialized: Path::new(&project.path).join(".amagi").join("config.json").is_file(),
         pending_review_count: 0,
         vault_folder: project.vault_folder.clone()
             .or_else(|| Some(crate::core::agent_exporter::project_vault_folder(&project.path))),

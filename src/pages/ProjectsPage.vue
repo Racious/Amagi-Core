@@ -51,12 +51,12 @@
           </div>
         </div>
         <div class="flex items-center gap-2 flex-shrink-0">
+          <!-- init_project 冪等（產物不存在才建），常駐提供「初始化／補齊骨架」 -->
           <button
-            v-if="!project.initialized"
             @click="initProject(project.id)"
             :disabled="projectStore.loading"
-            class="btn btn-primary btn-sm"
-          >初始化</button>
+            :class="['btn', 'btn-sm', project.initialized ? 'btn-ghost' : 'btn-primary']"
+          >{{ project.initialized ? '補齊骨架' : '初始化' }}</button>
           <button
             @click="initVault(project.id)"
             :disabled="vaultBusy"
@@ -105,7 +105,10 @@ async function initProject(projectId: string) {
   clearMessages()
   try {
     const result = await projectStore.initProject(projectId)
-    successMsg.value = `初始化完成，建立了 ${result.createdDirs.length} 個目錄。`
+    const total = result.createdDirs.length + result.createdFiles.length
+    successMsg.value = total > 0
+      ? `初始化完成，補齊 ${result.createdDirs.length} 個目錄、${result.createdFiles.length} 個檔案。`
+      : '骨架已完整，無需補齊。'
     setTimeout(() => { successMsg.value = null }, 4000)
   } catch (e: any) {
     error.value = e?.message ?? String(e)
