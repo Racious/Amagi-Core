@@ -2,6 +2,24 @@
 
 AMAGI Core 的所有重要變更記錄於此。版本遵循語意化版號（major.minor.patch）。
 
+## v0.8.0
+
+vault-first Phase 3 補完（整個系統一致 vault-first）＋ 三項體驗/防護修正。全數經 Codex 設計/程式碼交叉審查與實機批測。
+
+### 功能
+- **skill/wiki 入庫即出列（Phase 3）**：技能與 wiki 寫入 vault 成功後與記憶一致從佇列**出列**，`Synced` 狀態全面退役（`mark_synced` 移除）；啟動 migration 擴為清全型別殘留 Synced（備份 `queue.premigration-p3.bak` 可回滾）。佇列常態只剩待審與忽略項。
+- **promote 反轉 vault-first**：「升級為共用」改純 vault 檔案操作（`promote_memory(project_id, memory_id)`，零佇列參與）——先寫 shared、讀回驗證後才刪專案檔；同 id 嚴格預檢（不可讀受管檔 fail-closed、同 id 異檔名拒寫第二份）；中斷可續跑收斂；衍生物失敗語意明確（內聯 Err 可重試、錨點 warning 回報）。
+- **記憶庫頁直讀 vault**：新增 `list_vault_memories` 掃 vault 三層為資料源，修復 Phase 1 後「佇列篩 synced 恆空白、升級鈕無對象」的斷鏈。
+- **記憶身分鍵（id frontmatter 最小版）**：記憶檔寫出 `id:`；loader 優先讀 frontmatter id、legacy 檔 fallback 檔名片段；格式守門不變。
+
+### 修正
+- **學習去重**：規則式候選對佇列既有項去重，重按「學習變更」冪等、候選不再無限增生。
+- **初始化判定**：「已初始化」改以 `.amagi/config.json` 為憑證（原以 `.amagi/` 目錄存在誤判）；init 按鈕常駐、可補齊骨架（冪等）。
+- **封鎖項可視化**：學習結果「已封鎖」計數與 pending 技能拆分；審核頁新增唯讀封鎖區塊（遮罩片段＋處置建議＋確認丟棄出列）；狀態機防護——封鎖項不可接受/忽略/編輯，「全部接受」碰不到。
+
+### 安全
+- promote 全程非破壞 fail-closed（撞名不同內容/不可讀目標/身分集合不完整一律 Err、不覆寫不刪源）；封鎖項後端唯讀防洗白。經設計審查（6 發現全採納）＋程式碼審三輪（R1/R2/R3）＋兩輪實機批測。
+
 ## v0.7.0
 
 記憶同步反轉為 vault-first（杜絕幽靈復活）＋ 全域 doctrine 一鍵部署（跨機零手改）＋ UI 修正。
