@@ -5,7 +5,7 @@
 //!
 //!   add_project → init_project → learn(generate_candidates)
 //!     → review_queue(add/list/accept) → conflict gate → agent_exporter::sync
-//!     → 驗證真的落地的檔案內容 → mark_synced
+//!     → 驗證真的落地的檔案內容 → 出列（vault-first：入庫即出列，不留 Synced）
 //!
 //! 邊界說明：Tauri command 層（sync_agent_files 等）需要執行中的
 //! App + State<AppState>，無法在純測試環境構造；故這裡測「command 實際呼叫的
@@ -249,10 +249,10 @@ fn e2e_learn_review_sync_memory() {
         p.contains("/agent/memory/") && p.ends_with(".md") && !p.ends_with("MEMORY.md")
     }), "應寫個別記憶檔到 vault agent/memory/");
 
-    // mark_synced
-    review_queue::mark_synced(&sb.data_dir, &ids).unwrap();
+    // vault-first（Phase 3）：入庫成功後「出列」（不再 mark_synced 長留佇列帳本）
+    review_queue::remove_items_of_type(&sb.data_dir, &ids, ReviewItemType::Memory).unwrap();
     let after = review_queue::list_items(&sb.data_dir, Some(&project.id));
-    assert!(after.iter().all(|i| i.status == ReviewStatus::Synced));
+    assert!(after.iter().all(|i| i.item_type != ReviewItemType::Memory), "記憶入庫後應出列");
 }
 
 // ───────────────────────────────────────────────────────────

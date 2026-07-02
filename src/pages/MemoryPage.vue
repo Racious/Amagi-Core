@@ -5,9 +5,9 @@
       <p class="page-sub">瀏覽已同步進 vault 的記憶（專案 / 共用 / 全域三層），可把專案記憶升級為共用。</p>
     </div>
 
-    <div v-if="reviewStore.error" class="alert tone-danger mb-4"><span class="text-sm">{{ reviewStore.error }}</span></div>
+    <div v-if="loadError" class="alert tone-danger mb-4"><span class="text-sm">{{ loadError }}</span></div>
 
-    <div v-if="reviewStore.loading && memories.length === 0" class="card p-8 text-center text-sm text-muted">
+    <div v-if="loading && memories.length === 0" class="card p-8 text-center text-sm text-muted">
       載入記憶庫…
     </div>
 
@@ -38,7 +38,8 @@
       </div>
 
       <div class="card p-0 overflow-hidden">
-        <button v-for="m in filtered" :key="m.id"
+        <!-- key 用組合鍵（設計審 R4）：跨專案/跨層可能出現相同 id 片段，單用 id 會撞 Vue key -->
+        <button v-for="m in filtered" :key="`${m.syncScope}:${m.projectId}:${m.id}`"
                 type="button" class="mem-row" @click="open(m)">
           <span class="text-sm font-bold text-fg truncate" style="max-width: 36%; flex: none;">{{ m.title }}</span>
           <span class="text-xs text-muted truncate flex-1">{{ summary(m.content) }}</span>
@@ -95,19 +96,30 @@
 <script setup lang="ts">
 import { computed, ref, watch, onMounted } from 'vue'
 import { api, type ReviewItem, type SyncScope } from '../api/tauriCommands'
-import { useReviewStore } from '../stores/reviewStore'
 import { useProjectStore } from '../stores/projectStore'
 
-// 讀 store 快取（App 啟動已 fetch），切頁無殘影、零新後端。
-const reviewStore = useReviewStore()
 const projectStore = useProjectStore()
 
-// 進頁刷新：reviewStore 於 App 啟動載入，期間若做過同步/升級會過時 → 進記憶庫頁時刷新，
-// 確保剛同步/升級的記憶即時反映（已有快取，故不閃，只是更新）。
-// fetchItems 內部自行 catch（失敗時保留既有 items 快取、設 reviewStore.error → 頁面顯示提示），
-// 故此處不需再 catch；用 void 表明刻意不等待。
+// vault-first（Phase 3）：記憶庫＝vault 實際內容，直接掃 vault 三層（唯一權威）。
+// Phase 1 後記憶入庫即出列，佇列已無 Synced 帳本可篩——舊「reviewStore 篩 synced」資料源恆空。
+const memories = ref<ReviewItem[]>([])
+const loading = ref(false)
+const loadError = ref<string | null>(null)
+
+async function loadMemories() {
+  loading.value = true
+  try {
+    memories.value = await api.listVaultMemories()
+    loadError.value = null
+  } catch (e: any) {
+    loadError.value = e?.message ?? String(e)
+  } finally {
+    loading.value = false
+  }
+}
+
 onMounted(() => {
-  void reviewStore.fetchItems()
+  void loadMemories()
 })
 
 const lens = ref<string>('all') // 'all' | 'shared' | 'global' | <projectId>
@@ -116,11 +128,6 @@ const detail = ref<ReviewItem | null>(null)
 const confirmingPromote = ref(false)
 const busy = ref(false)
 const msg = ref('')
-
-// 已同步進 vault 的記憶（記憶庫＝vault 實際內容，故只取 synced）
-const memories = computed(() =>
-  reviewStore.items.filter(i => i.itemType === 'memory' && i.status === 'synced'),
-)
 
 function projectName(id: string): string {
   return projectStore.projects.find(p => p.id === id)?.name ?? id
@@ -217,10 +224,11 @@ async function doPromote() {
   busy.value = true
   msg.value = ''
   try {
-    await api.promoteMemory(detail.value.id)
+    const r = await api.promoteMemory(detail.value.projectId, detail.value.id)
     msg.value = `已將「${detail.value.title}」升級為共用記憶。`
+    if (r.warnings.length > 0) msg.value += ` ⚠ ${r.warnings.join(' ')}`
     close()
-    await reviewStore.fetchItems()
+    await loadMemories()
   } catch (e: any) {
     msg.value = `升級失敗：${e?.message ?? e}`
   } finally {

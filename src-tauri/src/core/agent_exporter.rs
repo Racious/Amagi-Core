@@ -145,19 +145,23 @@ pub(crate) fn memory_index_entries(items: &[&ReviewItem]) -> Vec<(String, String
     }).collect()
 }
 
-/// 解析 vault 記憶檔（格式見 markdown::build_memory_file）→ (title, category, body, created)。
-fn parse_memory_file(raw: &str) -> (String, String, String, Option<chrono::DateTime<chrono::Utc>>) {
+/// 解析 vault 記憶檔（格式見 markdown::build_memory_file）→ (id, title, category, body, created)。
+/// `id` 為 frontmatter 身分鍵（R2 最小版）；legacy 檔無 `id:` → None（呼叫端 fallback 檔名 idfrag）。
+fn parse_memory_file(raw: &str) -> (Option<String>, String, String, String, Option<chrono::DateTime<chrono::Utc>>) {
     use chrono::TimeZone;
     let lines: Vec<&str> = raw.lines().collect();
     if lines.first().map(|l| l.trim()) != Some("---") {
-        return (String::new(), String::new(), raw.trim().to_string(), None);
+        return (None, String::new(), String::new(), raw.trim().to_string(), None);
     }
-    let (mut title, mut category, mut created) = (String::new(), String::new(), None);
+    let (mut id, mut title, mut category, mut created) = (None, String::new(), String::new(), None);
     let mut i = 1;
     while i < lines.len() {
         let t = lines[i].trim();
         if t == "---" { i += 1; break; }
-        if let Some(r) = t.strip_prefix("title:") {
+        if let Some(r) = t.strip_prefix("id:") {
+            let v = r.trim().trim_matches('"').trim().to_string();
+            if !v.is_empty() { id = Some(v); }
+        } else if let Some(r) = t.strip_prefix("title:") {
             title = r.trim().trim_matches('"').trim().to_string();
         } else if let Some(r) = t.strip_prefix("category:") {
             category = r.trim().to_string();
@@ -174,7 +178,7 @@ fn parse_memory_file(raw: &str) -> (String, String, String, Option<chrono::DateT
         i += 1;
     }
     let body = lines.get(i..).map(|s| s.join("\n")).unwrap_or_default().trim().to_string();
-    (title, category, body, created)
+    (id, title, category, body, created)
 }
 
 /// 讀取一個記憶目錄中「所有合法受管記憶檔」→ ReviewItem（vault-first 權威來源核心）。
@@ -198,7 +202,7 @@ fn read_memory_dir(mem_dir: &Path) -> Vec<ReviewItem> {
             .map(|p| p == canon_mem.as_path()).unwrap_or(false);
         if !parent_ok { continue; }
         let raw = match std::fs::read_to_string(ent.path()) { Ok(s) => s, Err(_) => continue };
-        let (title, category, content, created) = parse_memory_file(&raw);
+        let (fm_id, title, category, content, created) = parse_memory_file(&raw);
         // 格式守門：只認具備合法 frontmatter 的記憶檔，避免把手放殘留/惡意 .md 洗白。
         if title.is_empty() || category.is_empty() || created.is_none() { continue; }
         let stem = fname.strip_suffix(".md").unwrap_or(&fname);
@@ -207,8 +211,11 @@ fn read_memory_dir(mem_dir: &Path) -> Vec<ReviewItem> {
             None => continue,
         };
         if fs_utils::slugify(&title) != slug_part { continue; }
+        // 身分鍵（R2 最小版 id frontmatter，adr-005/spec §5）：優先 frontmatter `id`（完整、穩定），
+        // legacy 檔無 id → fallback 檔名 idfrag。下方一致性守門以 memory_filename 對回原檔
+        // （id 前 8 位英數 == 檔名 idfrag），frontmatter id 被竄改成對不上檔名者一律忽略。
         let item = ReviewItem {
-            id: idfrag,
+            id: fm_id.unwrap_or(idfrag),
             project_id: String::new(),
             item_type: ReviewItemType::Memory,
             category,
@@ -247,6 +254,15 @@ fn load_tier_memory_from_vault(vault_root: &Path, tier: &str, scope: SyncScope) 
     let mut items = read_memory_dir(&dir);
     for it in &mut items { it.sync_scope = scope.clone(); }
     items
+}
+
+/// vault-first：共用層（shared）記憶權威集（Phase 3 公開：list_vault_memories / promote 收斂判定用）。
+pub fn load_shared_memory_from_vault(vault_root: &Path) -> Vec<ReviewItem> {
+    load_tier_memory_from_vault(vault_root, "shared", SyncScope::Shared)
+}
+/// vault-first：全域層（general）記憶權威集（Phase 3 公開：list_vault_memories 用）。
+pub fn load_global_memory_from_vault(vault_root: &Path) -> Vec<ReviewItem> {
+    load_tier_memory_from_vault(vault_root, "general", SyncScope::Global)
 }
 
 // 註：跨機回填 `reconcile_project_memory_from_vault` 已於 vault-first 反轉（[[adr-005-vault-first-sync]]）
@@ -314,7 +330,7 @@ pub fn sync_agent_files(
         // 寫記憶檔/索引、孤兒清理、專案 AGENTS/CLAUDE 內聯，全部只在安全閘通過後才動（Codex r4/r7）。
         match safe_project_memory_dir(vroot, &vault_folder) {
             // hard gate（Codex r7 高）：有專案記憶要寫、但 vault_folder 不安全 → 直接 Err，
-            // 阻止外層 mark_synced（不可「沒寫進 vault 卻標已同步」，違反 Phase 3a hard gate）。
+            // 阻止外層出列（不可「沒寫進 vault 卻視為已入庫」，違反 Phase 3a hard gate）。
             None if !project_mem.is_empty() => {
                 return Err(AppError::InvalidPath(format!(
                     "不安全的 vault_folder「{vault_folder}」，拒絕寫入專案記憶（避免逃逸 vault）"
@@ -590,45 +606,165 @@ pub fn preview_shared_memory(vault_root: &Path, memory: &[ReviewItem]) -> Vec<Fi
     preview_tier_memory(vault_root, memory, SyncScope::Shared, "shared")
 }
 
-/// 升級（Phase 3b-2）：把一筆專案記憶移到 shared/agent/memory。
-/// ⚠️ 註：promote 仍為 queue-first（呼叫端先定案 queue、再讓 vault 對齊），屬 **Phase 3 待改**（spec §9），
-/// 尚未納入本輪 vault-first 反轉範圍。
-/// 1) 刪舊 `projects/<vf>/agent/memory/<該筆>` + 以剩餘專案記憶重建該專案索引（清孤兒）；
-/// 2) 把 Shared 全集寫進 `shared/agent/memory/`（呼叫端以該筆的 Shared 版本含於 all_shared；
-///    queue 的 scope/status 由呼叫端在本函式 I/O 成功後才更新，失敗則維持原狀可重試）。
-/// `promoted` 用於算舊檔名（檔名僅依 title+id，與 scope 無關）。回傳 shared 寫入清單。
+/// promote 結果：`moved`＝本次實際搬了檔（false＝續跑收斂，僅補刷索引）。
+pub struct PromoteOutcome {
+    pub moved: bool,
+}
+
+/// promote 的 shared 同 id **嚴格**預檢（R2 高）：不可用寬鬆 loader——`read_memory_dir` 對讀取失敗
+/// 靜默跳過，身分集合不完整時 promote 會誤判 0 筆而寫出第二份身分（fail-open）。
+/// 規則：只掃「受管檔名且檔名 id 片段 == 目標 id 前 8 位英數」的項目（守門規則下，片段不符者
+/// 不可能持有同 id；非受管檔不屬身分集合，由檔名層級檢查兜住）——命中片段者必須是一般檔、
+/// 可讀、且能解析出身分 id，否則 Err（fail-closed）。回傳可確認的 (檔名, 完整 id) 清單。
+fn strict_scan_shared_same_idfrag(shared_dir: &Path, idfrag: &str) -> Result<Vec<(String, String)>, AppError> {
+    let mut out = Vec::new();
+    let rd = match std::fs::read_dir(shared_dir) {
+        Ok(r) => r,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(out),
+        Err(e) => return Err(AppError::Io(format!("shared 記憶目錄無法列舉（{e}），中止升級"))),
+    };
+    for ent in rd.flatten() {
+        let fname = ent.file_name().to_string_lossy().to_string();
+        if fname == "MEMORY.md" || !looks_like_memory_file(&fname) { continue; }
+        let stem = fname.strip_suffix(".md").unwrap_or(&fname);
+        let file_frag = match stem.rfind('-') {
+            Some(i) => stem[i + 1..].to_string(),
+            None => continue,
+        };
+        if file_frag != idfrag { continue; }
+        // 片段命中 → 必須能正面確認身分，否則 fail-closed
+        let is_regular = std::fs::symlink_metadata(ent.path())
+            .map(|m| m.file_type().is_file()).unwrap_or(false);
+        if !is_regular {
+            return Err(AppError::InvalidPath(format!(
+                "shared/agent/memory/{fname} 非一般檔（symlink/目錄），身分無法確認，中止升級")));
+        }
+        let raw = std::fs::read_to_string(ent.path()).map_err(|e| AppError::Io(format!(
+            "shared/agent/memory/{fname} 讀取失敗（{e}）：同 id 身分無法確認，中止升級（未寫任何檔）")))?;
+        let (fm_id, title, category, _content, created) = parse_memory_file(&raw);
+        if title.is_empty() || category.is_empty() || created.is_none() {
+            return Err(AppError::InvalidPath(format!(
+                "shared/agent/memory/{fname} 缺必要 frontmatter，身分無法確認，中止升級；請先修復或移除該檔")));
+        }
+        out.push((fname, fm_id.unwrap_or(file_frag)));
+    }
+    Ok(out)
+}
+
+/// 目標 id 的檔名片段（與 `memory_filename` 同規則：前 8 位 ASCII 英數）。
+fn id_frag(id: &str) -> String {
+    let s: String = id.chars().filter(|c| c.is_ascii_alphanumeric()).take(8).collect();
+    if s.is_empty() { "x".to_string() } else { s }
+}
+
+/// 以 vault 現有檔重建某記憶目錄的 MEMORY.md 索引（目錄不存在則跳過；空集合寫空索引，
+/// 與 sync 的三層語意一致「反映已無」）。promote 兩側索引重建共用。
+fn rebuild_memory_index_in(mem_dir: &Path, items: &[ReviewItem]) -> Result<(), AppError> {
+    if !mem_dir.is_dir() { return Ok(()); }
+    let refs: Vec<&ReviewItem> = items.iter().collect();
+    let entries = memory_index_entries(&refs);
+    std::fs::write(mem_dir.join("MEMORY.md"), markdown::build_memory_index(&entries))
+        .map_err(|e| AppError::Io(e.to_string()))
+}
+
+/// 升級（Phase 3 vault-first，[[adr-005-vault-first-sync]]）：把一筆專案記憶移到 shared/agent/memory。
+/// **純 vault 檔案操作、零 queue 參與**——以 `memory_id`（frontmatter id 或 legacy 檔名 idfrag）
+/// 在專案層權威集定位。順序與失敗語意（設計審 R1/R3）：
+/// 1) **先寫 shared**（專用寫檔，不走 sync_tier_memory 的「只寫 Accepted」狀態過濾路徑）；
+///    目標已存在且內容不同 → Err 不覆寫（非破壞）；同內容 → 視為已寫入（冪等重試）。
+/// 2) **刪專案檔前讀回驗證** shared 檔確實落地且內容一致——杜絕「沒寫成就刪源」的資料遺失窗口。
+/// 3) 兩側索引由 vault 現有檔重建。
+/// **可續跑收斂**：專案層無此 id 但 shared 有 → 先前搬移已完成（中斷重試），只補刷索引。
 pub fn promote_memory_to_shared(
     vault_root: &Path,
     vault_folder: &str,
-    promoted: &ReviewItem,
-    remaining_project_memory: &[ReviewItem],
-    all_shared_memory: &[ReviewItem],
-) -> Result<Vec<String>, AppError> {
+    memory_id: &str,
+) -> Result<PromoteOutcome, AppError> {
     // 安全閘（Codex r4 高）：promote 的刪檔路徑與 sync 共用同一道防線，杜絕 vault_folder 污染逃逸。
     let proj_mem_dir = safe_project_memory_dir(vault_root, vault_folder)
-        .ok_or_else(|| AppError::InvalidPath(format!("不安全的 vault_folder，拒絕升級刪檔：{vault_folder}")))?;
-    // 1) 刪舊專案檔：限「檔名 == memory_filename(promoted) 的一般檔」（不跟隨 symlink、不誤刪）。
-    let old_file = proj_mem_dir.join(memory_filename(promoted));
-    let old_is_regular = std::fs::symlink_metadata(&old_file)
-        .map(|m| m.file_type().is_file())
-        .unwrap_or(false);
-    if old_is_regular {
-        std::fs::remove_file(&old_file).map_err(|e| AppError::Io(e.to_string()))?;
+        .ok_or_else(|| AppError::InvalidPath(format!("不安全的 vault_folder，拒絕升級：{vault_folder}")))?;
+    let proj_items = load_project_memory_from_vault(vault_root, vault_folder);
+    let matches: Vec<&ReviewItem> = proj_items.iter().filter(|i| i.id == memory_id).collect();
+    if matches.len() > 1 {
+        return Err(AppError::InvalidPath(format!(
+            "記憶 id「{memory_id}」在專案層命中 {} 筆（id 片段碰撞），請先改名消歧再升級", matches.len())));
     }
-    // 以剩餘專案記憶重建該專案索引（孤兒清除）
-    let proj_mems: Vec<&ReviewItem> = remaining_project_memory.iter()
-        .filter(|i| i.item_type == ReviewItemType::Memory && i.sync_scope == SyncScope::Project)
-        .collect();
-    let proj_idx = proj_mem_dir.join("MEMORY.md");
-    if proj_mems.is_empty() {
-        let _ = std::fs::remove_file(&proj_idx);
-    } else {
-        let entries = memory_index_entries(&proj_mems);
-        std::fs::write(&proj_idx, markdown::build_memory_index(&entries))
-            .map_err(|e| AppError::Io(e.to_string()))?;
+
+    let moved = match matches.first() {
+        Some(&item) => {
+            let shared_dir = safe_tier_memory_dir(vault_root, "shared")
+                .ok_or_else(|| AppError::InvalidPath("不安全的 shared 記憶目錄，拒絕升級".into()))?;
+            std::fs::create_dir_all(&shared_dir).map_err(|e| AppError::Io(e.to_string()))?;
+            let fname = memory_filename(item);
+            let dest = shared_dir.join(&fname);
+            let expected = markdown::build_memory_file(item);
+            // id 唯一性（外審 #2＋R2 高）：以**嚴格預檢**掃 shared 同片段檔——不可讀/無法確認身分
+            // 即 Err（fail-closed），杜絕「loader 靜默跳過不可讀檔 → 誤判 0 筆 → 寫出第二份身分」。
+            // 同 id 恰 1 筆且檔名一致 → 交由下方檔名層級檢查判冪等；檔名不同或多筆 → Err 人工消歧。
+            let same_id: Vec<(String, String)> =
+                strict_scan_shared_same_idfrag(&shared_dir, &id_frag(&item.id))?
+                    .into_iter().filter(|(_, fid)| fid == &item.id).collect();
+            match same_id.len() {
+                0 => {}
+                1 if same_id[0].0 == fname => {}
+                1 => return Err(AppError::InvalidPath(format!(
+                    "shared 已有同 id「{}」但不同檔名（{}），拒絕再寫一份；請先消歧既有檔再升級",
+                    item.id, same_id[0].0))),
+                n => return Err(AppError::InvalidPath(format!(
+                    "shared 已有同 id「{}」共 {n} 筆，請先人工消歧再升級", item.id))),
+            }
+            match std::fs::read_to_string(&dest) {
+                Ok(existing) if existing == expected => { /* 冪等重試：shared 已有同內容 */ }
+                Ok(_) => return Err(AppError::InvalidPath(format!(
+                    "shared/agent/memory/{fname} 已存在且內容不同，拒絕覆寫（非破壞）；請先處理既有檔再升級"))),
+                // 只有「確定不存在」才建新檔（外審 #1）：其他讀取錯誤（權限/非 UTF-8/暫時 IO）
+                // 可能代表既有檔在場但讀不了 → 一律 Err、不覆寫、不刪源（非破壞 fail-closed）。
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound =>
+                    std::fs::write(&dest, &expected).map_err(|e| AppError::Io(e.to_string()))?,
+                Err(e) => return Err(AppError::Io(format!(
+                    "shared/agent/memory/{fname} 讀取失敗（{e}）：為避免覆寫既有資料，中止升級（未刪任何檔）"))),
+            }
+            // 讀回驗證後才刪源（R1）
+            let readback = std::fs::read_to_string(&dest)
+                .map_err(|e| AppError::Io(format!("shared 寫入驗證失敗（{e}），中止刪除專案檔")))?;
+            if readback != expected {
+                return Err(AppError::Io(format!(
+                    "shared/agent/memory/{fname} 內容驗證不符，中止刪除專案檔")));
+            }
+            // 刪舊專案檔：限一般檔、不跟隨 symlink（沿用現行防護）
+            let old_file = proj_mem_dir.join(&fname);
+            let old_is_regular = std::fs::symlink_metadata(&old_file)
+                .map(|m| m.file_type().is_file()).unwrap_or(false);
+            if old_is_regular {
+                std::fs::remove_file(&old_file).map_err(|e| AppError::Io(e.to_string()))?;
+            }
+            true
+        }
+        None => {
+            // 專案層無此 id：shared **嚴格預檢**（R2 高，與寫入路徑同標準）——
+            // 恰 1 筆 → 續跑收斂（僅補刷索引）；多筆（外審 #2）→ Err 人工消歧；皆無 → 找不到。
+            let shared_dir = safe_tier_memory_dir(vault_root, "shared")
+                .ok_or_else(|| AppError::InvalidPath("不安全的 shared 記憶目錄，拒絕收斂".into()))?;
+            let n = strict_scan_shared_same_idfrag(&shared_dir, &id_frag(memory_id))?
+                .into_iter().filter(|(_, fid)| fid == memory_id).count();
+            match n {
+                0 => return Err(AppError::InvalidPath(format!(
+                    "找不到記憶 id「{memory_id}」（專案層與 shared 皆無）"))),
+                1 => {}
+                n => return Err(AppError::InvalidPath(format!(
+                    "shared 已有同 id「{memory_id}」共 {n} 筆，請先人工消歧再收斂"))),
+            }
+            false
+        }
+    };
+
+    // 兩側索引由 vault 現有檔重建
+    rebuild_memory_index_in(&proj_mem_dir,
+        &load_project_memory_from_vault(vault_root, vault_folder))?;
+    if let Some(shared_dir) = safe_tier_memory_dir(vault_root, "shared") {
+        rebuild_memory_index_in(&shared_dir, &load_shared_memory_from_vault(vault_root))?;
     }
-    // 2) 寫 Shared 全集 → shared/agent/memory
-    sync_tier_memory(vault_root, all_shared_memory, SyncScope::Shared, "shared")
+    Ok(PromoteOutcome { moved })
 }
 
 #[cfg(test)]
@@ -667,6 +803,27 @@ mod tests {
         let dests = skill_dest_paths(root, &[&s]);
         let p = dests[0].to_string_lossy().replace('\\', "/");
         assert!(p.contains("/_skills/skill-id123456/SKILL.md"), "空 slug 應 fallback skill-<id>，實得 {p}");
+    }
+
+    #[test]
+    fn test_skill_sync_writes_vault_and_no_revive_after_delete() {
+        // Phase 3 回歸：技能寫入 vault `_skills`（唯一權威）；vault 端刪除後，
+        // 再 sync（佇列無該項——入庫已出列）不得復活。
+        let root = std::env::temp_dir().join(format!("amagi-skill-norevive-{}", uuid::Uuid::new_v4()));
+        let vault = root.join("vault");
+        let proj = root.join("proj");
+        std::fs::create_dir_all(&proj).unwrap();
+        std::fs::create_dir_all(&vault).unwrap();
+        let s = sk("sk1", "my-skill");
+        sync_agent_files(proj.to_str().unwrap(), Some("projects/p"), Some(&vault),
+            std::slice::from_ref(&s), &[]).unwrap();
+        let dest = vault.join("_skills").join("my-skill").join("SKILL.md");
+        assert!(dest.is_file(), "技能應寫入 vault _skills");
+        // vault 端刪除 → 再 sync（無新核可）→ 不復活
+        std::fs::remove_dir_all(vault.join("_skills").join("my-skill")).unwrap();
+        sync_agent_files(proj.to_str().unwrap(), Some("projects/p"), Some(&vault), &[], &[]).unwrap();
+        assert!(!dest.exists(), "vault 刪除的技能不得被 sync 復活");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     fn mem(id: &str, title: &str, scope: SyncScope) -> ReviewItem {
@@ -791,7 +948,7 @@ mod tests {
     #[test]
     fn test_sync_unsafe_vault_folder_errs_not_silent() {
         // hard gate（Codex r7 高）：不安全 vault_folder + 有專案記憶 → 必須 Err，
-        // 不可靜默跳過 vault 寫入卻讓外層 mark_synced。
+        // 不可靜默跳過 vault 寫入卻讓外層出列（沒入庫不得視為已同步）。
         let root = std::env::temp_dir().join(format!("amagi-hardgate-{}", uuid::Uuid::new_v4()));
         let vault = root.join("vault");
         let proj = root.join("proj");
@@ -819,8 +976,7 @@ mod tests {
         assert!(safe_project_memory_dir(&vault, "projects/../../etc").is_none());
         assert!(safe_project_memory_dir(&vault, "general").is_none());
         // promote 遇不安全 vault_folder → Err（拒絕刪檔，不逃逸）
-        let m = mem("x", "t", SyncScope::Shared);
-        let r = promote_memory_to_shared(&vault, "../escape", &m, &[], std::slice::from_ref(&m));
+        let r = promote_memory_to_shared(&vault, "../escape", "x");
         assert!(r.is_err(), "不安全 vault_folder 應拒絕升級刪檔");
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -872,31 +1028,198 @@ mod tests {
     }
 
     #[test]
-    fn test_promote_memory_to_shared_moves_file() {
+    fn test_promote_memory_to_shared_moves_file_vault_first() {
+        // Phase 3 核心回歸：佇列零參與（本測試完全不碰 queue），僅憑 vault 檔案即可升級。
         let root = std::env::temp_dir().join(format!("amagi-promote-{}", uuid::Uuid::new_v4()));
         let vault = root.join("vault");
         let vf = "projects/foo";
-        // 預先在專案層寫一筆記憶（模擬已同步）
-        let proj_mem = mem("m1", "悔棋", SyncScope::Project);
+        // 預先在專案層寫兩筆記憶（模擬已同步；m2 留下驗證索引重建）
+        let m1 = mem("m1", "悔棋", SyncScope::Project);
+        let m2 = mem("m2", "技術棧", SyncScope::Project);
         let proj_dir = vault.join(vf).join("agent").join("memory");
         std::fs::create_dir_all(&proj_dir).unwrap();
-        let fname = memory_filename(&proj_mem);
-        std::fs::write(proj_dir.join(&fname), markdown::build_memory_file(&proj_mem)).unwrap();
+        let fname = memory_filename(&m1);
+        std::fs::write(proj_dir.join(&fname), markdown::build_memory_file(&m1)).unwrap();
+        std::fs::write(proj_dir.join(memory_filename(&m2)), markdown::build_memory_file(&m2)).unwrap();
         std::fs::write(proj_dir.join("MEMORY.md"), "舊索引").unwrap();
 
-        // 升級：該筆改 Shared、無剩餘專案記憶、all_shared 含該筆
-        let mut shared = proj_mem.clone();
-        shared.sync_scope = SyncScope::Shared;
-        promote_memory_to_shared(&vault, vf, &proj_mem, &[], std::slice::from_ref(&shared)).unwrap();
+        let out = promote_memory_to_shared(&vault, vf, "m1").unwrap();
+        assert!(out.moved, "應實際搬移");
 
-        // 舊專案檔刪、無剩餘 → 專案索引移除
+        // 舊專案檔刪、剩餘集重建索引（含 m2、不含 m1）
         assert!(!proj_dir.join(&fname).is_file(), "舊專案記憶檔應被刪");
-        assert!(!proj_dir.join("MEMORY.md").is_file(), "無剩餘專案記憶 → 索引移除");
+        let proj_idx = std::fs::read_to_string(proj_dir.join("MEMORY.md")).unwrap();
+        assert!(proj_idx.contains("技術棧"), "專案索引應含剩餘記憶");
+        assert!(!proj_idx.contains("悔棋"), "專案索引不得含已升級記憶");
         // shared 落點建立 + 索引
         let shared_dir = vault.join("shared").join("agent").join("memory");
         assert!(shared_dir.join(&fname).is_file(), "應在 shared/agent/memory 建立記憶檔");
-        assert!(shared_dir.join("MEMORY.md").is_file(), "應建立 shared 索引");
+        let shared_idx = std::fs::read_to_string(shared_dir.join("MEMORY.md")).unwrap();
+        assert!(shared_idx.contains("悔棋"), "shared 索引應含升級後記憶");
 
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_promote_not_found_and_shared_conflict() {
+        let root = std::env::temp_dir().join(format!("amagi-promote2-{}", uuid::Uuid::new_v4()));
+        let vault = root.join("vault");
+        let vf = "projects/foo";
+        let proj_dir = vault.join(vf).join("agent").join("memory");
+        std::fs::create_dir_all(&proj_dir).unwrap();
+        // 找不到（專案層與 shared 皆無）→ Err
+        assert!(promote_memory_to_shared(&vault, vf, "ghost").is_err(), "皆無此 id 應 Err");
+
+        // shared 已存在同檔名但**不同內容** → Err 不覆寫（非破壞），且不刪專案檔
+        let m1 = mem("m1", "悔棋", SyncScope::Project);
+        let fname = memory_filename(&m1);
+        std::fs::write(proj_dir.join(&fname), markdown::build_memory_file(&m1)).unwrap();
+        let shared_dir = vault.join("shared").join("agent").join("memory");
+        std::fs::create_dir_all(&shared_dir).unwrap();
+        std::fs::write(shared_dir.join(&fname), "別筆既有內容").unwrap();
+        assert!(promote_memory_to_shared(&vault, vf, "m1").is_err(), "shared 撞名不同內容應 Err");
+        assert!(proj_dir.join(&fname).is_file(), "衝突時專案檔不得被刪（無資料遺失窗口）");
+        assert_eq!(std::fs::read_to_string(shared_dir.join(&fname)).unwrap(), "別筆既有內容",
+            "shared 既有檔不得被覆寫");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_promote_unreadable_dest_errs_no_overwrite() {
+        // 外審 #1：shared 同名檔存在但讀取失敗（非 UTF-8）→ Err、不覆寫、不刪專案源檔。
+        let root = std::env::temp_dir().join(format!("amagi-promote4-{}", uuid::Uuid::new_v4()));
+        let vault = root.join("vault");
+        let vf = "projects/foo";
+        let m1 = mem("m1", "悔棋", SyncScope::Project);
+        let fname = memory_filename(&m1);
+        let proj_dir = vault.join(vf).join("agent").join("memory");
+        let shared_dir = vault.join("shared").join("agent").join("memory");
+        std::fs::create_dir_all(&proj_dir).unwrap();
+        std::fs::create_dir_all(&shared_dir).unwrap();
+        std::fs::write(proj_dir.join(&fname), markdown::build_memory_file(&m1)).unwrap();
+        // 無效 UTF-8 位元組 → read_to_string 回 InvalidData（非 NotFound）
+        let garbage: &[u8] = &[0xff, 0xfe, 0xfd, 0x80];
+        std::fs::write(shared_dir.join(&fname), garbage).unwrap();
+
+        assert!(promote_memory_to_shared(&vault, vf, "m1").is_err(), "目標檔不可讀應 Err（fail-closed）");
+        assert!(proj_dir.join(&fname).is_file(), "專案源檔不得被刪");
+        assert_eq!(std::fs::read(shared_dir.join(&fname)).unwrap(), garbage, "既有檔不得被覆寫");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_promote_same_id_different_filename_errs() {
+        // 外審 #2：shared 已有同 id 但不同檔名 → 拒絕寫第二份身分；收斂分支同 id 多筆 → Err。
+        let root = std::env::temp_dir().join(format!("amagi-promote5-{}", uuid::Uuid::new_v4()));
+        let vault = root.join("vault");
+        let vf = "projects/foo";
+        let m1 = mem("m1", "悔棋", SyncScope::Project);
+        let proj_dir = vault.join(vf).join("agent").join("memory");
+        let shared_dir = vault.join("shared").join("agent").join("memory");
+        std::fs::create_dir_all(&proj_dir).unwrap();
+        std::fs::create_dir_all(&shared_dir).unwrap();
+        std::fs::write(proj_dir.join(memory_filename(&m1)), markdown::build_memory_file(&m1)).unwrap();
+        // shared 既有：同 id「m1」、不同標題 → 不同檔名（受管格式、可被 loader 載入）
+        let other = mem("m1", "other-title", SyncScope::Shared);
+        std::fs::write(shared_dir.join(memory_filename(&other)), markdown::build_memory_file(&other)).unwrap();
+
+        assert!(promote_memory_to_shared(&vault, vf, "m1").is_err(), "同 id 不同檔名應 Err 消歧");
+        assert!(proj_dir.join(memory_filename(&m1)).is_file(), "源檔不得被刪");
+        assert!(!shared_dir.join(memory_filename(&m1)).exists(), "不得寫出第二份同 id 記憶");
+
+        // 收斂分支：專案層無此 id、shared 有兩筆同 id → Err 人工消歧
+        std::fs::remove_file(proj_dir.join(memory_filename(&m1))).unwrap();
+        std::fs::write(shared_dir.join(memory_filename(&m1)), markdown::build_memory_file(&m1)).unwrap();
+        assert!(promote_memory_to_shared(&vault, vf, "m1").is_err(), "shared 同 id 多筆收斂應 Err");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_promote_strict_preflight_unreadable_managed_file() {
+        // R2 高：shared 有「受管檔名＋同 id 片段」但不可讀（無效 UTF-8）→ 身分集合無法確認，
+        // promote 必須 Err（fail-closed）、不寫新檔、不刪源；與目標無關的壞檔不得誤傷。
+        let root = std::env::temp_dir().join(format!("amagi-promote6-{}", uuid::Uuid::new_v4()));
+        let vault = root.join("vault");
+        let vf = "projects/foo";
+        let m1 = mem("m1", "悔棋", SyncScope::Project);
+        let fname = memory_filename(&m1);
+        let proj_dir = vault.join(vf).join("agent").join("memory");
+        let shared_dir = vault.join("shared").join("agent").join("memory");
+        std::fs::create_dir_all(&proj_dir).unwrap();
+        std::fs::create_dir_all(&shared_dir).unwrap();
+        std::fs::write(proj_dir.join(&fname), markdown::build_memory_file(&m1)).unwrap();
+        // 同 id 片段（-m1）、不同檔名、不可讀 → 嚴格預檢必須擋下
+        let garbage: &[u8] = &[0xff, 0xfe, 0x80, 0x81];
+        std::fs::write(shared_dir.join("other-m1.md"), garbage).unwrap();
+
+        assert!(promote_memory_to_shared(&vault, vf, "m1").is_err(),
+            "同片段不可讀受管檔在場 → 應 Err（fail-closed），不得誤判 0 筆");
+        assert!(proj_dir.join(&fname).is_file(), "源檔不得被刪");
+        assert!(!shared_dir.join(&fname).exists(), "不得寫出新檔");
+
+        // 換成「無關片段」的壞檔 → 不影響身分判定，promote 應成功
+        std::fs::remove_file(shared_dir.join("other-m1.md")).unwrap();
+        std::fs::write(shared_dir.join("unrelated-zz9.md"), garbage).unwrap();
+        promote_memory_to_shared(&vault, vf, "m1").unwrap();
+        assert!(shared_dir.join(&fname).is_file(), "無關壞檔不得阻擋升級");
+        assert!(!proj_dir.join(&fname).exists(), "升級完成應刪源");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_promote_resumes_after_interruption() {
+        // R3 續跑收斂：①shared 已有同內容、專案檔還在（刪除前中斷）→ 重跑完成刪除；
+        // ②專案檔已刪、shared 有（索引重建前中斷）→ 重跑僅補刷索引（moved=false）。
+        let root = std::env::temp_dir().join(format!("amagi-promote3-{}", uuid::Uuid::new_v4()));
+        let vault = root.join("vault");
+        let vf = "projects/foo";
+        let m1 = mem("m1", "悔棋", SyncScope::Project);
+        let fname = memory_filename(&m1);
+        let proj_dir = vault.join(vf).join("agent").join("memory");
+        let shared_dir = vault.join("shared").join("agent").join("memory");
+        std::fs::create_dir_all(&proj_dir).unwrap();
+        std::fs::create_dir_all(&shared_dir).unwrap();
+
+        // ① 兩側各一份（同內容）
+        std::fs::write(proj_dir.join(&fname), markdown::build_memory_file(&m1)).unwrap();
+        std::fs::write(shared_dir.join(&fname), markdown::build_memory_file(&m1)).unwrap();
+        let out = promote_memory_to_shared(&vault, vf, "m1").unwrap();
+        assert!(out.moved, "同內容重試應完成搬移（刪源）");
+        assert!(!proj_dir.join(&fname).is_file(), "重試後專案檔應被刪");
+        assert!(shared_dir.join(&fname).is_file(), "shared 檔保留");
+
+        // ② 只剩 shared → 收斂路徑
+        let out2 = promote_memory_to_shared(&vault, vf, "m1").unwrap();
+        assert!(!out2.moved, "已搬移完成 → 僅收斂索引");
+        assert!(shared_dir.join("MEMORY.md").is_file(), "shared 索引應存在");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_loader_prefers_frontmatter_id() {
+        // R2 最小版：frontmatter 有 id → 以完整 id 為身分鍵；一致性守門仍過（idfrag == 檔名片段）。
+        let root = std::env::temp_dir().join(format!("amagi-fmid-{}", uuid::Uuid::new_v4()));
+        let vault = root.join("vault");
+        let vf = "projects/p";
+        let mem_dir = vault.join(vf).join("agent").join("memory");
+        std::fs::create_dir_all(&mem_dir).unwrap();
+        // 完整 uuid id：檔名只取前 8 位英數
+        let full_id = "a1b2c3d4-e5f6-7890-abcd-ef0123456789";
+        let m = mem(full_id, "完整鍵記憶", SyncScope::Project);
+        std::fs::write(mem_dir.join(memory_filename(&m)), markdown::build_memory_file(&m)).unwrap();
+        // legacy 檔（無 id frontmatter）→ fallback 檔名 idfrag
+        std::fs::write(mem_dir.join("legacy-cafebabe.md"),
+            "---\ntitle: \"legacy\"\ncategory: feedback\ncreated: 2026-07-01\n---\n舊檔").unwrap();
+
+        let loaded = load_project_memory_from_vault(&vault, vf);
+        assert_eq!(loaded.len(), 2);
+        assert!(loaded.iter().any(|i| i.id == full_id), "frontmatter id 應為完整身分鍵");
+        assert!(loaded.iter().any(|i| i.id == "cafebabe"), "legacy 檔 fallback 檔名 idfrag");
+        // 竄改 id 對不上檔名 → 一致性守門忽略該檔
+        std::fs::write(mem_dir.join("evil-deadbeef.md"),
+            "---\nid: zzzzzzzz-0000\ntitle: \"evil\"\ncategory: feedback\ncreated: 2026-07-01\n---\nx").unwrap();
+        let loaded2 = load_project_memory_from_vault(&vault, vf);
+        assert!(!loaded2.iter().any(|i| i.title == "evil"), "id 與檔名不符的檔應被守門忽略");
         let _ = std::fs::remove_dir_all(&root);
     }
 }

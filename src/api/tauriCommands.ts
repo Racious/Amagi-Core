@@ -201,6 +201,13 @@ export interface DeployResult {
   warnings: string[]
 }
 
+export interface PromoteResult {
+  /** true＝本次實際搬檔；false＝先前已搬移，本次僅收斂衍生物（續跑）。 */
+  moved: boolean
+  /** best-effort 衍生物（全域錨點）刷新失敗的提示訊息。 */
+  warnings: string[]
+}
+
 export interface WikiIngestInput {
   projectId: string
   layer: string
@@ -256,8 +263,11 @@ export const api = {
 
   syncAgentFiles: (projectId: string, force = false) => invoke<SyncResult>('sync_agent_files', { projectId, force }),
   previewSyncDiff: (projectId: string) => invoke<FileDiffPreview[]>('preview_sync_diff', { projectId }),
-  /** Phase 3b-2：把一筆已同步的專案層記憶升級為跨專案共用（移到 vault shared/agent/memory）。 */
-  promoteMemory: (itemId: string) => invoke<void>('promote_memory', { itemId }),
+  /** vault-first（Phase 3）：記憶庫資料源——直接掃 vault 三層記憶（唯一權威），不依賴佇列。 */
+  listVaultMemories: () => invoke<ReviewItem[]>('list_vault_memories'),
+  /** vault-first（Phase 3）：把一筆專案層記憶升級為跨專案共用（純 vault 檔案操作，以 vault id 定位）。 */
+  promoteMemory: (projectId: string, memoryId: string) =>
+    invoke<PromoteResult>('promote_memory', { projectId, memoryId }),
 
   // ── 差異匯出 ──────────────────────────────────────
   listChangedFiles: (projectId: string) => invoke<ChangedFile[]>('list_changed_files', { projectId }),

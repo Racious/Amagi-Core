@@ -143,7 +143,8 @@ pub async fn scan_vault_clips(state: State<'_, AppState>) -> Result<usize, AppEr
     Ok(n)
 }
 
-/// 接受指定的 wiki 候選並寫入 vault；成功者標記為 Synced。
+/// 接受指定的 wiki 候選並寫入 vault；成功者**出列**（Phase 3 vault-first：
+/// vault 頁即唯一權威，佇列不留 Synced 帳本；wiki 無索引/內聯衍生物，寫入成功即出列）。
 #[tauri::command]
 pub async fn write_wiki_pages(
     ids: Vec<String>,
@@ -163,8 +164,8 @@ pub async fn write_wiki_pages(
 
     let res = wiki_exporter::write_wiki_pages(Path::new(&vault_root), &wiki_items)?;
 
-    // 只把「真的寫進去」的標記為 Synced；被略過（目標已存在）的退回 Pending，
-    // 留在待審核區供老爺改標題重試，避免落入 accepted 的 UI 死角。
+    // 只把「真的寫進去」的**出列**（vault-first：頁面已在 vault，佇列不留 Synced 帳本）；
+    // 被略過（目標已存在）的退回 Pending，留在待審核區供老爺改標題重試，避免落入 accepted 的 UI 死角。
     if !res.written.is_empty() {
         let written_ids: Vec<String> = wiki_items
             .iter()
@@ -174,7 +175,7 @@ pub async fn write_wiki_pages(
             })
             .map(|i| i.id.clone())
             .collect();
-        review_queue::mark_synced(&data_dir, &written_ids)?;
+        review_queue::remove_items_of_type(&data_dir, &written_ids, ReviewItemType::Wiki)?;
     }
     if !res.skipped.is_empty() {
         let skipped_ids: Vec<String> = wiki_items

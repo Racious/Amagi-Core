@@ -79,19 +79,8 @@
       </div>
     </div>
 
-    <!-- 已寫入 -->
-    <div v-if="syncedWiki.length > 0">
-      <div class="mb-3 text-xs font-bold uppercase tracking-wider text-muted">
-        已寫入 vault（{{ syncedWiki.length }}）
-      </div>
-      <div class="space-y-2">
-        <div v-for="item in syncedWiki" :key="item.id" class="card p-3 flex items-center gap-3 opacity-70">
-          <span>✅</span>
-          <span class="text-sm flex-1 truncate text-muted">{{ item.title }}</span>
-          <span class="pill tone-success">{{ item.category }}</span>
-        </div>
-      </div>
-    </div>
+    <!-- 已寫入歷史不再由佇列呈現（Phase 3 vault-first：寫入成功即出列，頁面在 vault 即真相；
+         寫入當下的成功訊息已列出實際路徑，需追溯請看 vault）。 -->
   </div>
 </template>
 
@@ -136,7 +125,6 @@ const layerOptions = computed(() => {
 
 const wikiItems = computed(() => items.value.filter(i => i.itemType === 'wiki'))
 const pendingWiki = computed(() => wikiItems.value.filter(i => i.status === 'pending'))
-const syncedWiki = computed(() => wikiItems.value.filter(i => i.status === 'synced'))
 
 function onProjectChange() {
   form.value.layer = selectedProject.value?.vaultFolder ?? 'general'

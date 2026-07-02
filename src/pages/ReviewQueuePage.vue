@@ -50,9 +50,10 @@
       </div>
     </div>
 
-    <!-- 已同步 / 已忽略 -->
+    <!-- 已忽略（Phase 3 vault-first：已同步項入庫即出列，不再留佇列；此區常態只剩忽略項。
+         篩選仍容忍 synced 以顯示極端殘留（migration 前的舊資料），不承擔權威資料管理。 -->
     <div v-if="doneItems.length > 0" class="mt-6">
-      <div class="text-xs font-bold uppercase tracking-wider mb-3 text-muted">已完成（{{ doneItems.length }}）</div>
+      <div class="text-xs font-bold uppercase tracking-wider mb-3 text-muted">已忽略（{{ doneItems.length }}）</div>
       <div class="space-y-2">
         <div v-for="item in doneItems" :key="item.id"
              class="card p-3 flex items-center gap-3 opacity-60">

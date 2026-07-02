@@ -108,12 +108,13 @@ pub async fn sync_agent_files(
         }
     }
 
-    // ── 同步完成後：記憶「出列」、技能維持 Synced ───────────────────────
-    // vault-first（[[adr-005-vault-first-sync]]）：記憶成功寫入 vault 後從佇列**移除**（出列），
-    // 不再標 Synced 長留——vault 為唯一權威，杜絕「vault 端刪除被佇列全集復活」的幽靈。
+    // ── 同步完成後：記憶與技能一律「出列」（Phase 3，[[adr-005-vault-first-sync]]）───────
+    // vault-first：項目成功寫入 vault 後從佇列**移除**（出列），不再標 Synced 長留——
+    // vault 為唯一權威，杜絕「vault 端刪除被佇列全集復活」的幽靈與佇列帳本膨脹。
     // 專案記憶：其衍生物（專案 AGENTS/CLAUDE）已於 agent_exporter 寫入成功（否則 `?` 提早返回）→ 照常出列。
     // 跨層記憶（Global/Shared）：其衍生物＝全域錨點，僅在 anchor_ok 時出列，否則留 Accepted 可重試（Codex #1）。
-    // 技能/wiki 本輪維持現狀（Phase 1 暫存債，spec §7）→ 仍標 Synced。
+    // 技能：vault `_skills` 寫入成功（同上 `?` 保證）→ 出列；分發已由 Skills 頁直讀 vault，無衍生物待刷。
+    // 明確只出列 Skill 型別：Blocked 項不寫檔，維持原狀留佇列（不再被舊語意誤標 Synced）。
     let mut memory_done: Vec<String> = accepted.iter()
         .filter(|i| i.item_type == ReviewItemType::Memory && i.sync_scope == SyncScope::Project)
         .map(|i| i.id.clone())
@@ -126,14 +127,14 @@ pub async fn sync_agent_files(
         }
     }
     if !memory_done.is_empty() {
-        review_queue::remove_memory_items(&data_dir, &memory_done)?;
+        review_queue::remove_items_of_type(&data_dir, &memory_done, ReviewItemType::Memory)?;
     }
     let skill_done: Vec<String> = accepted.iter()
-        .filter(|i| i.item_type != ReviewItemType::Memory)
+        .filter(|i| i.item_type == ReviewItemType::Skill)
         .map(|i| i.id.clone())
         .collect();
     if !skill_done.is_empty() {
-        review_queue::mark_synced(&data_dir, &skill_done)?;
+        review_queue::remove_items_of_type(&data_dir, &skill_done, ReviewItemType::Skill)?;
     }
 
     // ── 歸檔已同步的 pending 技能檔 ──────────────────
@@ -206,91 +207,89 @@ pub async fn preview_sync_diff(
     Ok(previews)
 }
 
-/// Phase 3b-2 升級：把一筆「已同步的專案層記憶」提升為跨專案共用（scope→Shared、移到 shared/agent/memory）。
+/// promote 回傳：`moved`＝實際搬檔（false＝續跑收斂）；`warnings`＝best-effort 衍生物的失敗提示。
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromoteResultDto {
+    pub moved: bool,
+    pub warnings: Vec<String>,
+}
+
+/// 升級（Phase 3 vault-first，[[adr-005-vault-first-sync]]）：把一筆專案層記憶提升為跨專案共用。
+/// **純 vault 檔案操作、零 queue 參與**——由 `(project_id, memory_id)` 在 vault 專案層權威集定位，
+/// 先寫 shared（讀回驗證）再刪專案檔，兩側索引由 vault 重建（agent_exporter 內）。
+/// 衍生物語意（設計審 R3）：專案 AGENTS/CLAUDE 內聯重寫失敗 → Err 可重試（promote 可續跑收斂，
+/// 重試不重複搬檔）；全域錨點刷新維持 best-effort，失敗以 warning 回報前端。
 #[tauri::command]
-pub async fn promote_memory(item_id: String, state: State<'_, AppState>) -> Result<(), AppError> {
+pub async fn promote_memory(
+    project_id: String,
+    memory_id: String,
+    state: State<'_, AppState>,
+) -> Result<PromoteResultDto, AppError> {
     let data_dir = state.data_dir.clone();
-    let item = review_queue::list_items(&data_dir, None)
-        .into_iter()
-        .find(|i| i.id == item_id)
-        .ok_or_else(|| AppError::InvalidPath(format!("找不到記憶項：{item_id}")))?;
-    if item.item_type != ReviewItemType::Memory
-        || item.sync_scope != SyncScope::Project
-        || !matches!(item.status, ReviewStatus::Accepted | ReviewStatus::Synced)
-    {
-        return Err(AppError::InvalidPath("只能升級「已同步的專案層記憶」到共用".into()));
-    }
-    let project = project_manager::get_project(&item.project_id, &data_dir)
-        .ok_or_else(|| AppError::ProjectNotFound(item.project_id.clone()))?;
+    let project = project_manager::get_project(&project_id, &data_dir)
+        .ok_or_else(|| AppError::ProjectNotFound(project_id.clone()))?;
     let vault_root = vault_manager::get_vault_config(&data_dir).vault_path
         .ok_or_else(|| AppError::InvalidPath("尚未設定 vault 路徑，無法升級記憶".into()))?;
     let vault_folder = project.vault_folder.clone()
         .unwrap_or_else(|| agent_exporter::project_vault_folder(&project.path));
+    let vroot = std::path::Path::new(&vault_root);
 
-    // 先在記憶體算「升級後」預期集合，不先動 queue——避免 I/O 失敗留半升級狀態（Codex 3b-2 #2）
-    let all = review_queue::list_items(&data_dir, None);
-    // 本專案剩餘 Project 記憶（排除這筆）
-    let remaining_project: Vec<ReviewItem> = all.iter()
-        .filter(|i| i.project_id == item.project_id
-            && i.id != item_id
-            && i.item_type == ReviewItemType::Memory
-            && i.sync_scope == SyncScope::Project
-            && matches!(i.status, ReviewStatus::Accepted | ReviewStatus::Synced))
-        .cloned()
-        .collect();
-    // 既有 Shared 記憶 + 這筆（預設為 Shared）
-    let mut all_shared: Vec<ReviewItem> = all.iter()
-        .filter(|i| i.item_type == ReviewItemType::Memory
-            && i.sync_scope == SyncScope::Shared
-            && matches!(i.status, ReviewStatus::Accepted | ReviewStatus::Synced))
-        .cloned()
-        .collect();
-    let mut promoted_shared = item.clone();
-    promoted_shared.sync_scope = SyncScope::Shared;
-    all_shared.push(promoted_shared);
+    let outcome = agent_exporter::promote_memory_to_shared(vroot, &vault_folder, &memory_id)?;
 
-    // ⚠️ Phase 3 legacy（queue-first）：promote 尚未納入 vault-first 反轉（spec §9 待改），
-    // 仍走「先定案 queue（scope→Shared 且 Synced，原子單次寫入）、再讓 vault 對齊」。
-    // 此為 promote 專屬 legacy 路徑，**不代表一般 sync 的權威**（一般 sync 已 vault-first）。
-    review_queue::promote_scope_and_mark_synced(&data_dir, &item_id)?;
-
-    // 讓 vault 對齊此 promote 定案（冪等：移舊專案檔[存在才刪] + 重建索引 + 寫 shared 全集）。
-    // 失敗時回明確訊息引導重試 promote（此 legacy 路徑冪等、不重複）。
-    if let Err(e) = agent_exporter::promote_memory_to_shared(
-        std::path::Path::new(&vault_root),
-        &vault_folder,
-        &item,
-        &remaining_project,
-        &all_shared,
-    ) {
-        return Err(AppError::Io(format!(
-            "已標記為共用，但檔案搬移未完成（{e}）。請再次執行「升級為共用」重試——此步驟冪等、不會重複（promote 為 Phase 3 legacy 流程）。"
-        )));
-    }
-
-    // ── 次要反映（best-effort，失敗不回滾已完成的升級）──
-    // 重寫來源專案 AGENTS/CLAUDE 的內聯索引：升級後 vault 已少這一筆，必讀檔須同步，
-    // 否則殘留舊內聯條目誤導 AI（Codex 中 #3）。以「剩餘專案記憶」重建（空→「（尚無）」）。
-    let remaining_refs: Vec<&ReviewItem> = remaining_project.iter().collect();
+    // 重寫來源專案 AGENTS/CLAUDE 內聯索引（以 vault 剩餘權威集重建；空→「（尚無）」）。
+    // 失敗 → Err（非靜默）：升級已入 shared，殘留舊內聯會誤導 AI；重試 promote 走收斂路徑補刷。
+    let remaining = agent_exporter::load_project_memory_from_vault(vroot, &vault_folder);
+    let remaining_refs: Vec<&ReviewItem> = remaining.iter().collect();
     let entries = agent_exporter::memory_index_entries(&remaining_refs);
     let bullets = crate::utils::markdown::memory_bullets(&entries);
     let agents_path = std::path::Path::new(&project.path).join("AGENTS.md");
     if agents_path.exists() {
-        let _ = crate::utils::markdown::write_with_backup(
+        crate::utils::markdown::write_with_backup(
             &agents_path,
             &crate::utils::markdown::build_agents_md(&vault_folder, &bullets),
-        );
+        ).map_err(|e| AppError::Io(format!(
+            "升級已完成，但專案 AGENTS.md 內聯重寫失敗（{e}）；請再次執行「升級為共用」重試（冪等、只補刷衍生物）")))?;
     }
     let claude_path = std::path::Path::new(&project.path).join("CLAUDE.md");
     if claude_path.exists() {
-        let _ = crate::utils::markdown::write_with_backup(
+        crate::utils::markdown::write_with_backup(
             &claude_path,
             &crate::utils::markdown::build_claude_md(Some(&vault_folder), &bullets),
-        );
+        ).map_err(|e| AppError::Io(format!(
+            "升級已完成，但專案 CLAUDE.md 內聯重寫失敗（{e}）；請再次執行「升級為共用」重試（冪等、只補刷衍生物）")))?;
     }
-    // shared 已變動 → 刷新全域錨點內聯索引（best-effort）。
-    let _ = vault_manager::refresh_global_anchor(&data_dir);
-    Ok(())
+    // shared 已變動 → 刷新全域錨點內聯索引（best-effort，失敗以 warning 回報，重試 promote 或重設 vault 可收斂）。
+    let mut warnings = Vec::new();
+    if let Err(e) = vault_manager::refresh_global_anchor(&data_dir) {
+        warnings.push(format!(
+            "全域錨點刷新失敗（{e}）：升級已完成，但 ~/.claude/CLAUDE.md／~/.codex/AGENTS.md 的記憶索引未更新；請再升級重試或到「設定」重設 vault 路徑。"));
+    }
+    Ok(PromoteResultDto { moved: outcome.moved, warnings })
+}
+
+/// 記憶庫頁資料源（Phase 3 vault-first）：直接掃 vault 三層記憶（唯一權威），
+/// 取代「佇列篩 Synced」（Phase 1 出列後佇列常態無 Synced，舊資料源恆空）。
+/// vault 未設 → 空集合（與 list_library_skills 同慣例）。status 一律回 Synced（僅供前端顯示相容）。
+#[tauri::command]
+pub async fn list_vault_memories(state: State<'_, AppState>) -> Result<Vec<ReviewItem>, AppError> {
+    let data_dir = state.data_dir.clone();
+    let vault_root = match vault_manager::get_vault_config(&data_dir).vault_path {
+        Some(v) => v,
+        None => return Ok(Vec::new()),
+    };
+    let vroot = std::path::Path::new(&vault_root);
+    let mut out: Vec<ReviewItem> = Vec::new();
+    for p in project_manager::list_projects(&data_dir) {
+        let vf = p.vault_folder.clone()
+            .unwrap_or_else(|| agent_exporter::project_vault_folder(&p.path));
+        let mut items = agent_exporter::load_project_memory_from_vault(vroot, &vf);
+        for it in &mut items { it.project_id = p.id.clone(); }
+        out.extend(items);
+    }
+    out.extend(agent_exporter::load_shared_memory_from_vault(vroot));
+    out.extend(agent_exporter::load_global_memory_from_vault(vroot));
+    Ok(out)
 }
 
 #[cfg(test)]

@@ -74,10 +74,13 @@ pub fn build_claude_md(vault_folder: Option<&str>, memory_bullets: &str) -> Stri
 }
 
 /// 單筆記憶檔（vault `agent/memory/<slug>.md`）：frontmatter + 內文。
+/// `id:` 為穩定身分鍵（adr-005 / spec §5 最小版）：loader 優先以此為操作鍵，
+/// 檔名的 `slug-<idfrag>` 僅作可讀性與一致性守門（idfrag = id 前 8 位英數）。
 pub fn build_memory_file(item: &ReviewItem) -> String {
     // 顯示用日期取本地時區（created_at 以 UTC 儲存）：避免台北凌晨換算回 UTC 差一天（F3）。
     let created = item.created_at.with_timezone(&chrono::Local).format("%Y-%m-%d");
     let mut s = String::from("---\n");
+    s.push_str(&format!("id: {}\n", item.id));
     s.push_str(&format!("title: \"{}\"\n", yaml_escape(&item.title)));
     s.push_str(&format!("category: {}\n", item.category));
     s.push_str(&format!("created: {}\n", created));
@@ -313,6 +316,7 @@ mod tests {
         };
         let f = build_memory_file(&m);
         assert!(f.starts_with("---\n"));
+        assert!(f.contains("id: m1"), "記憶檔應寫出穩定 id frontmatter（身分鍵）");
         assert!(f.contains("title: \"悔棋功能\""));
         assert!(f.contains("category: project_rule"));
         assert!(f.contains("undo() 回退上一步"));
