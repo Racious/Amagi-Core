@@ -103,6 +103,33 @@ pub fn generate_candidates(
     candidates
 }
 
+/// 規則式候選去重：同一 diff 重按「學習變更」不得重複入列（冪等）。
+/// 指紋＝(project_id, item_type, category, title, content) 完整相等——規則式候選內容確定性，
+/// Blocked 項內容含遮罩片段，diff 不同→指紋不同→視為新項合法入列。
+/// 僅對佇列中 `Pending`／`Accepted`（尚待處理）比對；`Ignored` 不擋——
+/// 老爺忽略過的建議日後仍可因新一輪學習重新出現（要永久壓制屬另一產品決策）。
+/// 批內同指紋亦僅保留第一筆。
+pub fn dedup_against_queue(
+    candidates: Vec<ReviewItem>,
+    existing: &[ReviewItem],
+) -> Vec<ReviewItem> {
+    let fingerprint = |i: &ReviewItem| {
+        format!(
+            "{}\u{1f}{:?}\u{1f}{}\u{1f}{}\u{1f}{}",
+            i.project_id, i.item_type, i.category, i.title, i.content
+        )
+    };
+    let mut seen: std::collections::HashSet<String> = existing
+        .iter()
+        .filter(|i| matches!(i.status, ReviewStatus::Pending | ReviewStatus::Accepted))
+        .map(fingerprint)
+        .collect();
+    candidates
+        .into_iter()
+        .filter(|c| seen.insert(fingerprint(c)))
+        .collect()
+}
+
 fn blocked_item(project_id: &str, hits: &[safety_filter::SafetyHit]) -> ReviewItem {
     let mut lines = vec![
         "AMAGI 偵測到這次變更中有下列疑似機密，已擋下自動保存。".to_string(),
@@ -230,5 +257,96 @@ mod tests {
         let files = vec![".github/workflows/release.yml".to_string()];
         let candidates = generate_candidates("proj1", &files, "", "normal diff content");
         assert!(candidates.iter().any(|c| c.category == "ci_cd_workflow"));
+    }
+
+    /// 模擬「同一 diff 重按學習」：第一輪入列後（Pending），第二輪相同候選應全數被擋。
+    #[test]
+    fn test_relearn_same_diff_is_idempotent() {
+        let files = vec!["README.md".to_string(), "tauri.conf.json".to_string()];
+        let added: String = (0..15).map(|i| format!("+第{}行\n", i)).collect();
+        let diff = format!("diff --git a/README.md b/README.md\n{}", added);
+
+        let round1 = generate_candidates("proj1", &files, "", &diff);
+        assert!(!round1.is_empty());
+        // 覆蓋記憶與規則技能兩種型別
+        assert!(round1.iter().any(|c| c.item_type == ReviewItemType::Memory));
+        assert!(round1.iter().any(|c| c.item_type == ReviewItemType::Skill));
+
+        // 第一輪照常入列
+        let queued = dedup_against_queue(round1.clone(), &[]);
+        assert_eq!(queued.len(), round1.len(), "佇列為空時不應擋任何候選");
+
+        // 第二輪：同 diff 再學一次 → 全數命中指紋、不重複入列
+        let round2 = generate_candidates("proj1", &files, "", &diff);
+        assert!(dedup_against_queue(round2, &queued).is_empty(), "重按學習應冪等");
+    }
+
+    /// Accepted（已核可待同步）同樣視為既有，不得重複入列。
+    #[test]
+    fn test_dedup_blocks_against_accepted() {
+        let files = vec!["README.md".to_string()];
+        let added: String = (0..15).map(|i| format!("+第{}行\n", i)).collect();
+        let diff = format!("diff --git a/README.md b/README.md\n{}", added);
+
+        let mut existing = generate_candidates("proj1", &files, "", &diff);
+        for item in &mut existing {
+            item.status = ReviewStatus::Accepted;
+        }
+        let round2 = generate_candidates("proj1", &files, "", &diff);
+        assert!(dedup_against_queue(round2, &existing).is_empty(), "Accepted 也應擋");
+    }
+
+    /// Ignored 不擋：老爺忽略過的建議，新一輪學習仍可重新出現。
+    #[test]
+    fn test_dedup_allows_reappearance_after_ignored() {
+        let files = vec!["README.md".to_string()];
+        let added: String = (0..15).map(|i| format!("+第{}行\n", i)).collect();
+        let diff = format!("diff --git a/README.md b/README.md\n{}", added);
+
+        let mut existing = generate_candidates("proj1", &files, "", &diff);
+        for item in &mut existing {
+            item.status = ReviewStatus::Ignored;
+        }
+        let round2 = generate_candidates("proj1", &files, "", &diff);
+        assert!(!dedup_against_queue(round2, &existing).is_empty(), "Ignored 不應擋重新建議");
+    }
+
+    /// 指紋含內容：Blocked 項遮罩片段不同（不同機密）→ 視為新項，不得誤擋。
+    #[test]
+    fn test_dedup_keeps_blocked_with_different_content() {
+        let files = vec!["config.rs".to_string()];
+        let existing = generate_candidates("proj1", &files, "", "api_key=sk-secret123abc");
+        let next = generate_candidates("proj1", &files, "", "api_key=sk-another456xyz");
+        let blocked_next: Vec<_> = next
+            .into_iter()
+            .filter(|c| c.item_type == ReviewItemType::Blocked)
+            .collect();
+        assert!(!blocked_next.is_empty());
+        let kept = dedup_against_queue(blocked_next, &existing);
+        assert!(!kept.is_empty(), "遮罩內容不同的 Blocked 項是新發現，不得誤擋");
+    }
+
+    /// 不同專案的相同候選互不干擾（指紋含 project_id）。
+    #[test]
+    fn test_dedup_scoped_by_project() {
+        let files = vec!["README.md".to_string()];
+        let added: String = (0..15).map(|i| format!("+第{}行\n", i)).collect();
+        let diff = format!("diff --git a/README.md b/README.md\n{}", added);
+
+        let existing = generate_candidates("proj1", &files, "", &diff);
+        let other = generate_candidates("proj2", &files, "", &diff);
+        let kept = dedup_against_queue(other.clone(), &existing);
+        assert_eq!(kept.len(), other.len(), "不同專案不得互擋");
+    }
+
+    /// 批內同指紋僅保留第一筆（防未來規則重複產出）。
+    #[test]
+    fn test_dedup_within_batch() {
+        let dup = make_memory(
+            "proj1", "project_rule", "同標題", "同內容",
+            RiskLevel::Low, vec!["AGENTS.md".into()],
+        );
+        let batch = vec![dup.clone(), dup];
+        assert_eq!(dedup_against_queue(batch, &[]).len(), 1, "批內重複應僅留一筆");
     }
 }
