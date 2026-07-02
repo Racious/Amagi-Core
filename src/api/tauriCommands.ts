@@ -32,7 +32,10 @@ export interface ScanResult {
 export interface LearnResult {
   projectId: string
   candidatesGenerated: number
+  /** 僅計真正被安全過濾封鎖的候選 */
   blockedCount: number
+  /** .amagi/pending/ 撈到的 Agent 技能草稿數（與封鎖無關） */
+  pendingSkillCount: number
   candidateIds: string[]
 }
 
@@ -259,6 +262,7 @@ export const api = {
   listReviewItems: (projectId?: string) => invoke<ReviewItem[]>('list_review_items', { projectId: projectId ?? null }),
   acceptReviewItems: (ids: string[]) => invoke<ReviewApplyResult>('accept_review_items', { ids }),
   ignoreReviewItems: (ids: string[]) => invoke<void>('ignore_review_items', { ids }),
+  discardBlockedItems: (ids: string[]) => invoke<number>('discard_blocked_items', { ids }),
   updateReviewItem: (item: ReviewItem) => invoke<ReviewItem>('update_review_item', { item }),
 
   syncAgentFiles: (projectId: string, force = false) => invoke<SyncResult>('sync_agent_files', { projectId, force }),

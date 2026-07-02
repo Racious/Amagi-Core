@@ -49,7 +49,8 @@ pub async fn learn_from_project(
     Ok(LearnResult {
         project_id,
         candidates_generated: generated,
-        blocked_count: blocked + pending_count,   // pending 技能也計入
+        blocked_count: blocked,
+        pending_skill_count: pending_count,
         candidate_ids: ids,
     })
 }

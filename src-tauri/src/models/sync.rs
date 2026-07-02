@@ -17,7 +17,10 @@ pub struct ScanResult {
 pub struct LearnResult {
     pub project_id: String,
     pub candidates_generated: usize,
+    /// 僅計真正被 safety_filter 封鎖的候選（ReviewItemType::Blocked）
     pub blocked_count: usize,
+    /// 從 .amagi/pending/ 撈到的 Agent 技能草稿數（與封鎖無關，分開呈現）
+    pub pending_skill_count: usize,
     pub candidate_ids: Vec<String>,
 }
 

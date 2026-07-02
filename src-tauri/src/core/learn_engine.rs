@@ -114,8 +114,8 @@ fn blocked_item(project_id: &str, hits: &[safety_filter::SafetyHit]) -> ReviewIt
     }
     lines.push(String::new());
     lines.push("處置建議：".to_string());
-    lines.push("- 若是誤判（例如 commit SHA、雜湊值），點「忽略」即可，不影響其他記憶。".to_string());
-    lines.push("- 若確為真實機密，請從原始檔與 git 紀錄中移除，切勿同步進 AGENTS.md／CLAUDE.md。".to_string());
+    lines.push("- 若是誤判（例如 commit SHA、雜湊值），點「確認丟棄」即可，不影響其他候選。".to_string());
+    lines.push("- 若確為真實機密，請先從原始檔與 git 紀錄中移除，再點「確認丟棄」；切勿同步進 AGENTS.md／CLAUDE.md。".to_string());
 
     ReviewItem {
         id: Uuid::new_v4().to_string(),

@@ -34,6 +34,16 @@ pub async fn ignore_review_items(
     review_queue::ignore_items(&data_dir, &ids)
 }
 
+/// 「確認丟棄」封鎖項：實體出列（僅 Blocked 型別，型別防護在 core 層）。
+#[tauri::command]
+pub async fn discard_blocked_items(
+    ids: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<usize, AppError> {
+    let data_dir = state.data_dir.clone();
+    review_queue::discard_blocked_items(&data_dir, &ids)
+}
+
 #[tauri::command]
 pub async fn update_review_item(
     item: ReviewItem,

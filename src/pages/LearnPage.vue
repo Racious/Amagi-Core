@@ -28,7 +28,10 @@
     <div v-if="learnResult" class="alert tone-success mb-4">
       <div class="font-bold text-sm">
         產生 {{ learnResult.candidatesGenerated }} 個候選項
-        <span v-if="learnResult.blockedCount > 0">（{{ learnResult.blockedCount }} 個已封鎖）</span>
+        <span v-if="learnResult.pendingSkillCount > 0">（含 {{ learnResult.pendingSkillCount }} 個 Agent 技能草稿）</span>
+      </div>
+      <div v-if="learnResult.blockedCount > 0" class="text-sm mt-1" style="color: var(--c-danger)">
+        ⛔ 偵測到疑似敏感內容，已建立 {{ learnResult.blockedCount }} 筆封鎖項——請至審核頁檢視命中規則
       </div>
       <RouterLink to="/review" class="inline-block mt-2 text-xs font-bold" style="color: var(--c-accent)">前往審核 →</RouterLink>
     </div>
