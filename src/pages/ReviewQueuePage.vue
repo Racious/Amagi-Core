@@ -27,6 +27,8 @@
             <div class="flex items-center gap-2 flex-wrap mb-2">
               <StatusBadge status="blocked_type" />
               <StatusBadge :status="item.risk" />
+              <!-- 舊版殘留的 accepted/ignored 封鎖項也導入此區，標示現況供辨識 -->
+              <StatusBadge v-if="item.status !== 'pending'" :status="item.status" />
               <span class="font-bold text-sm text-fg">{{ item.title }}</span>
             </div>
             <div class="text-sm text-muted whitespace-pre-wrap">{{ item.content }}</div>
@@ -100,11 +102,13 @@ import StatusBadge from '../components/StatusBadge.vue'
 
 const reviewStore = useReviewStore()
 
-// 封鎖項獨立成塊（唯讀 + 確認丟棄）；一般待審清單不含 blocked，「全部接受/忽略」也就碰不到它
-const blockedItems = computed(() => reviewStore.items.filter(i => i.status === 'pending' && i.itemType === 'blocked'))
+// 封鎖項獨立成塊（唯讀 + 確認丟棄）；一般待審清單不含 blocked，「全部接受/忽略」也就碰不到它。
+// 收「全部狀態」的 blocked（Codex R2）：舊版 queue.json 可能殘留 Accepted（G1 歷史殭屍）/
+// Ignored 的封鎖項，一律導進此區給出丟棄出口，待同步/已忽略區則排除 blocked。
+const blockedItems = computed(() => reviewStore.items.filter(i => i.itemType === 'blocked'))
 const pendingItems = computed(() => reviewStore.items.filter(i => i.status === 'pending' && i.itemType !== 'wiki' && i.itemType !== 'blocked'))
-const acceptedItems = computed(() => reviewStore.items.filter(i => i.status === 'accepted' && i.itemType !== 'wiki'))
-const doneItems = computed(() => reviewStore.items.filter(i => (i.status === 'ignored' || i.status === 'synced') && i.itemType !== 'wiki'))
+const acceptedItems = computed(() => reviewStore.items.filter(i => i.status === 'accepted' && i.itemType !== 'wiki' && i.itemType !== 'blocked'))
+const doneItems = computed(() => reviewStore.items.filter(i => (i.status === 'ignored' || i.status === 'synced') && i.itemType !== 'wiki' && i.itemType !== 'blocked'))
 
 async function accept(id: string) {
   await reviewStore.accept([id])

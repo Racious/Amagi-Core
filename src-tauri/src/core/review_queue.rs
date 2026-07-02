@@ -288,6 +288,22 @@ mod tests {
     }
 
     #[test]
+    fn test_discard_blocked_removes_any_status() {
+        let dir = std::env::temp_dir().join(format!("amagi-rq-dis2-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // 舊版殘留（Codex R2）：G1 歷史殭屍（Accepted）與舊 UI 忽略（Ignored）的封鎖項，
+        // 丟棄不限狀態，皆須可出列
+        add_items(&dir, vec![
+            item("b-acc", ReviewItemType::Blocked, ReviewStatus::Accepted),
+            item("b-ign", ReviewItemType::Blocked, ReviewStatus::Ignored),
+        ]).unwrap();
+        let removed = discard_blocked_items(&dir, &["b-acc".to_string(), "b-ign".to_string()]).unwrap();
+        assert_eq!(removed, 2, "Accepted/Ignored 封鎖殘留皆應可丟棄出列");
+        assert!(list_items(&dir, None).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn test_migrate_backup_already_exists_still_clears() {
         // R5 邊界：p3 備份已存在（AlreadyExists）→ 沿用既有回滾點續行、仍完成清除，
         // 且不覆蓋既有備份內容（一次性快照語意）。
