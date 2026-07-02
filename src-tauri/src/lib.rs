@@ -161,6 +161,7 @@ pub fn run() {
             list_review_items,
             accept_review_items,
             ignore_review_items,
+            discard_blocked_items,
             update_review_item,
             sync_agent_files,
             preview_sync_diff,

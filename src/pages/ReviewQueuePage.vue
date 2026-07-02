@@ -15,24 +15,50 @@
 
     <div v-if="reviewStore.loading" class="text-center py-8 text-muted">載入中…</div>
 
-    <div v-else-if="pendingItems.length === 0"
-         class="card card-dashed p-8 text-center">
-      <div class="text-4xl mb-3">✅</div>
-      <div class="font-bold mb-1 text-fg">沒有待審核的候選項</div>
-      <div class="text-sm text-muted">前往「學習變更」頁面掃描專案以產生候選記憶。</div>
-    </div>
+    <template v-else>
+      <!-- 封鎖項（安全過濾）：唯讀，僅能確認丟棄——不提供編輯/接受，避免敏感內容被洗白後同步 -->
+      <div v-if="blockedItems.length > 0" class="mb-6">
+        <div class="text-xs font-bold uppercase tracking-wider mb-3" style="color: var(--c-danger)">
+          ⛔ 已封鎖（{{ blockedItems.length }}）— 疑似敏感內容，唯讀
+        </div>
+        <div class="space-y-3">
+          <div v-for="item in blockedItems" :key="item.id"
+               class="card p-4" style="border-color: var(--c-danger)">
+            <div class="flex items-center gap-2 flex-wrap mb-2">
+              <StatusBadge status="blocked_type" />
+              <StatusBadge :status="item.risk" />
+              <!-- 舊版殘留的 accepted/ignored 封鎖項也導入此區，標示現況供辨識 -->
+              <StatusBadge v-if="item.status !== 'pending'" :status="item.status" />
+              <span class="font-bold text-sm text-fg">{{ item.title }}</span>
+            </div>
+            <div class="text-sm text-muted whitespace-pre-wrap">{{ item.content }}</div>
+            <div class="flex justify-end mt-3 pt-3 border-t border-border">
+              <button @click="discardBlocked(item)" :disabled="reviewStore.loading"
+                      class="btn btn-danger btn-sm">🗑 確認丟棄</button>
+            </div>
+          </div>
+        </div>
+      </div>
 
-    <div v-else class="space-y-3">
-      <ReviewItemCard
-        v-for="item in pendingItems"
-        :key="item.id"
-        :item="item"
-        @accept="accept(item.id)"
-        @ignore="ignore(item.id)"
-        @save="save"
-        @save-and-accept="saveAndAccept"
-      />
-    </div>
+      <div v-if="pendingItems.length === 0 && blockedItems.length === 0"
+           class="card card-dashed p-8 text-center">
+        <div class="text-4xl mb-3">✅</div>
+        <div class="font-bold mb-1 text-fg">沒有待審核的候選項</div>
+        <div class="text-sm text-muted">前往「學習變更」頁面掃描專案以產生候選記憶。</div>
+      </div>
+
+      <div v-else class="space-y-3">
+        <ReviewItemCard
+          v-for="item in pendingItems"
+          :key="item.id"
+          :item="item"
+          @accept="accept(item.id)"
+          @ignore="ignore(item.id)"
+          @save="save"
+          @save-and-accept="saveAndAccept"
+        />
+      </div>
+    </template>
 
     <!-- 已接受待同步 -->
     <div v-if="acceptedItems.length > 0" class="mt-8">
@@ -68,6 +94,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import { ask } from '@tauri-apps/plugin-dialog'
 import { useReviewStore } from '../stores/reviewStore'
 import type { ReviewItem } from '../api/tauriCommands'
 import ReviewItemCard from '../components/ReviewItemCard.vue'
@@ -75,9 +102,13 @@ import StatusBadge from '../components/StatusBadge.vue'
 
 const reviewStore = useReviewStore()
 
-const pendingItems = computed(() => reviewStore.items.filter(i => i.status === 'pending' && i.itemType !== 'wiki'))
-const acceptedItems = computed(() => reviewStore.items.filter(i => i.status === 'accepted' && i.itemType !== 'wiki'))
-const doneItems = computed(() => reviewStore.items.filter(i => (i.status === 'ignored' || i.status === 'synced') && i.itemType !== 'wiki'))
+// 封鎖項獨立成塊（唯讀 + 確認丟棄）；一般待審清單不含 blocked，「全部接受/忽略」也就碰不到它。
+// 收「全部狀態」的 blocked（Codex R2）：舊版 queue.json 可能殘留 Accepted（G1 歷史殭屍）/
+// Ignored 的封鎖項，一律導進此區給出丟棄出口，待同步/已忽略區則排除 blocked。
+const blockedItems = computed(() => reviewStore.items.filter(i => i.itemType === 'blocked'))
+const pendingItems = computed(() => reviewStore.items.filter(i => i.status === 'pending' && i.itemType !== 'wiki' && i.itemType !== 'blocked'))
+const acceptedItems = computed(() => reviewStore.items.filter(i => i.status === 'accepted' && i.itemType !== 'wiki' && i.itemType !== 'blocked'))
+const doneItems = computed(() => reviewStore.items.filter(i => (i.status === 'ignored' || i.status === 'synced') && i.itemType !== 'wiki' && i.itemType !== 'blocked'))
 
 async function accept(id: string) {
   await reviewStore.accept([id])
@@ -85,6 +116,15 @@ async function accept(id: string) {
 
 async function ignore(id: string) {
   await reviewStore.ignore([id])
+}
+
+async function discardBlocked(item: ReviewItem) {
+  const ok = await ask(
+    `確定丟棄封鎖項「${item.title}」？\n\n丟棄不影響其他候選；若內容確為真實機密，請先至原始檔與 git 紀錄移除。`,
+    { title: '確認丟棄封鎖項', kind: 'warning' },
+  )
+  if (!ok) return
+  await reviewStore.discardBlocked([item.id])
 }
 
 async function save(item: ReviewItem) {
