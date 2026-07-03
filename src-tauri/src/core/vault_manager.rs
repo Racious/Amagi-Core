@@ -38,6 +38,16 @@ pub fn get_vault_config(data_dir: &Path) -> VaultConfig {
     json_store::read_json_or_default(&config_path(data_dir))
 }
 
+/// 讀本機 vault 設定並驗 project_path 不在 vault 內；未設 vault → 放行。
+/// 「以 project.path 為根寫檔」的 command（bridge、init 等）入口共用此閘
+/// （2026-07-03 事故防守深度；核心比對在 agent_exporter::ensure_project_outside_vault）。
+pub fn ensure_project_path_outside_vault(project_path: &str, data_dir: &Path) -> Result<(), AppError> {
+    if let Some(vp) = get_vault_config(data_dir).vault_path {
+        crate::core::agent_exporter::ensure_project_outside_vault(Path::new(&vp), project_path)?;
+    }
+    Ok(())
+}
+
 /// vault 設定狀態，供首次啟動引導（2c）判斷是否需引導、是否已掛 git（保命）。
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -475,6 +485,34 @@ mod tests {
         std::fs::create_dir_all(vault.join(".git")).unwrap();
         let st = get_vault_status(&data_dir);
         assert!(st.configured && st.is_git_repo);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn test_ensure_project_path_outside_vault() {
+        // bridge 等寫入型 command 共用閘：vault 已設 → 根/子路徑拒、外部過；未設 → 放行
+        let base = std::env::temp_dir().join(format!("amagi-vguard-cfg-{}", uuid::Uuid::new_v4()));
+        let data_dir = base.join("data");
+        let vault = base.join("vault");
+        let proj = base.join("proj");
+        std::fs::create_dir_all(&data_dir).unwrap();
+        std::fs::create_dir_all(vault.join("projects").join("x")).unwrap();
+        std::fs::create_dir_all(&proj).unwrap();
+        json_store::write_json(&config_path(&data_dir), &VaultConfig {
+            vault_path: Some(vault.to_string_lossy().to_string()),
+            pointer_written: true,
+        }).unwrap();
+
+        assert!(ensure_project_path_outside_vault(vault.to_str().unwrap(), &data_dir).is_err(), "vault 根應拒");
+        assert!(ensure_project_path_outside_vault(
+            vault.join("projects").join("x").to_str().unwrap(), &data_dir).is_err(), "vault 子路徑應拒");
+        assert!(ensure_project_path_outside_vault(proj.to_str().unwrap(), &data_dir).is_ok(), "vault 外應過");
+
+        // vault 未設定（另一個乾淨 data_dir）→ 放行
+        let data2 = base.join("data2");
+        std::fs::create_dir_all(&data2).unwrap();
+        assert!(ensure_project_path_outside_vault(vault.to_str().unwrap(), &data2).is_ok(), "vault 未設應放行");
 
         let _ = std::fs::remove_dir_all(&base);
     }

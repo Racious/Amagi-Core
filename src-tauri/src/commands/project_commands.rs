@@ -1,7 +1,7 @@
 use tauri::State;
 use crate::{AppError, AppState};
 use crate::models::project::{ProjectInfo, InitResult};
-use crate::core::project_manager;
+use crate::core::{project_manager, vault_manager};
 
 #[tauri::command]
 pub async fn add_project(
@@ -21,7 +21,9 @@ pub async fn init_project(
     let data_dir = state.data_dir.clone();
     let project = project_manager::get_project(&project_id, &data_dir)
         .ok_or_else(|| AppError::ProjectNotFound(project_id.clone()))?;
-    project_manager::init_project(&project)
+    // 防守深度：把本機 vault 根傳入，init 端拒絕在 vault 內落骨架（2026-07-03 事故）。
+    let vault_root = vault_manager::get_vault_config(&data_dir).vault_path;
+    project_manager::init_project(&project, vault_root.as_deref().map(std::path::Path::new))
 }
 
 #[tauri::command]

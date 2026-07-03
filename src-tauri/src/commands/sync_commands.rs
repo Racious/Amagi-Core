@@ -235,6 +235,11 @@ pub async fn promote_memory(
         .unwrap_or_else(|| agent_exporter::project_vault_folder(&project.path));
     let vroot = std::path::Path::new(&vault_root);
 
+    // 防守深度（2026-07-03 事故，Codex 高）：存量「project.path 落在 vault 內」的專案，
+    // 下方會以 project.path 為根重寫 AGENTS/CLAUDE 內聯——必須在**搬檔前** fail-closed，
+    // 否則記憶已升級、指針拒寫，留下半完成狀態。
+    agent_exporter::ensure_project_outside_vault(vroot, &project.path)?;
+
     let outcome = agent_exporter::promote_memory_to_shared(vroot, &vault_folder, &memory_id)?;
 
     // 重寫來源專案 AGENTS/CLAUDE 內聯索引（以 vault 剩餘權威集重建；空→「（尚無）」）。
