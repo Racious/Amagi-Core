@@ -136,7 +136,7 @@ fn e2e_add_and_init_project() {
     assert!(project_manager::get_project(&project.id, &sb.data_dir).is_some());
 
     // init_project：建立 .amagi 骨架 + 模板檔
-    let result = project_manager::init_project(&project).unwrap();
+    let result = project_manager::init_project(&project, Some(&sb.vault_dir())).unwrap();
     assert!(!result.created_dirs.is_empty());
 
     for d in ["memory", "pending", "skills", "history", "artifacts", "state"] {
@@ -173,7 +173,7 @@ fn e2e_add_and_init_project() {
     assert!(sb.read("CLAUDE.md").contains(".amagi/workflow-state.md"), "CLAUDE.md 薄錨應指向軌跡檔");
 
     // 冪等：再 init 一次不該爆，且不重複建立既有檔
-    let second = project_manager::init_project(&project).unwrap();
+    let second = project_manager::init_project(&project, Some(&sb.vault_dir())).unwrap();
     assert!(second.created_dirs.is_empty(), "第二次 init 不應重建目錄");
 }
 
@@ -184,7 +184,7 @@ fn e2e_add_and_init_project() {
 fn e2e_learn_review_sync_memory() {
     let sb = Sandbox::new("memory");
     let project = project_manager::add_project(&sb.repo_str(), &sb.data_dir).unwrap();
-    project_manager::init_project(&project).unwrap();
+    project_manager::init_project(&project, Some(&sb.vault_dir())).unwrap();
 
     // learn：README 大改 + package.json + CLAUDE.md（觸發 project_rule / tech_stack / agent_rule）
     let changed = vec![
@@ -265,7 +265,7 @@ fn e2e_custom_vault_folder_in_init_scaffold() {
     // 模擬自訂/遷移後的 mapping，與 repo basename 不同
     project.vault_folder = Some("projects/custom-mapping".to_string());
 
-    project_manager::init_project(&project).unwrap();
+    project_manager::init_project(&project, Some(&sb.vault_dir())).unwrap();
     assert!(sb.read("AGENTS.md").contains("projects/custom-mapping/"),
         "init AGENTS.md 應指向自訂 vault_folder，而非 repo basename");
     assert!(sb.read("CLAUDE.md").contains("projects/custom-mapping/"),
@@ -276,7 +276,7 @@ fn e2e_custom_vault_folder_in_init_scaffold() {
 fn e2e_custom_vault_folder_in_sync() {
     let sb = Sandbox::new("customvfsync");
     let project = project_manager::add_project(&sb.repo_str(), &sb.data_dir).unwrap();
-    project_manager::init_project(&project).unwrap();
+    project_manager::init_project(&project, Some(&sb.vault_dir())).unwrap();
 
     let vf = Some("projects/custom-mapping");
     let mem = mem_item(&project.id, "tech_stack", "Tech Stack", "Rust + Tauri", SyncScope::Project);
@@ -342,7 +342,7 @@ fn e2e_gitignore_partial_and_no_false_ignores() {
 fn e2e_skill_sync_native_format() {
     let sb = Sandbox::new("skill");
     let project = project_manager::add_project(&sb.repo_str(), &sb.data_dir).unwrap();
-    project_manager::init_project(&project).unwrap();
+    project_manager::init_project(&project, Some(&sb.vault_dir())).unwrap();
 
     let content = "## 描述\n替遊戲狀態加入悔棋功能\n\n## 何時使用\n- 需要撤回上一步\n- 觸發關鍵字：undo、悔棋\n\n## 步驟\n1. 在 store 新增 history 陣列\n2. 實作 undo()";
     let skill = skill_item(&project.id, "新增悔棋功能", content);

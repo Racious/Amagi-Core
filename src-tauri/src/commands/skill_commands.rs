@@ -158,6 +158,33 @@ pub struct SkillSelectionDto {
     pub target: String,
 }
 
+/// 白名單分割（可測核心）：已註冊專案路徑 → （合法 target 集合, 被 vault 閘排除者）。
+/// 存量「path 在 vault 內」的專案一律排除（2026-07-03 事故防守深度）：
+/// 技能分發/取消會在 target 下建/刪 `.codex|.claude/skills/**`，不得落入 vault。
+fn partition_allowed_targets(
+    project_paths: Vec<String>,
+    vault_root: Option<&str>,
+) -> (std::collections::HashSet<String>, Vec<String>) {
+    let mut allowed = std::collections::HashSet::new();
+    let mut excluded = Vec::new();
+    for p in project_paths {
+        let inside = vault_root
+            .map(|v| fs_utils::is_same_or_under(Path::new(v), Path::new(&p)))
+            .unwrap_or(false);
+        if inside { excluded.push(p) } else { allowed.insert(p); }
+    }
+    (allowed, excluded)
+}
+
+/// 被 vault 閘排除、且本次確實被勾選的 target → 以標註訊息併入 invalid_targets 回報前端。
+fn blocked_vault_targets(excluded: Vec<String>, selections: &[SkillSelectionDto]) -> Vec<String> {
+    excluded
+        .into_iter()
+        .filter(|t| selections.iter().any(|s| &s.target == t))
+        .map(|t| format!("{t}（位於 Amagi-Vault 知識庫內，已拒絕）"))
+        .collect()
+}
+
 /// 選擇性分發：只把前端勾選的「技能 × 目標」配對寫出。取代粗暴的「全技能→全專案」。
 #[tauri::command]
 pub async fn distribute_skills_selective(
@@ -174,11 +201,13 @@ pub async fn distribute_skills_selective(
     let claude_dir = fs_utils::global_claude_skills_dir()
         .ok_or_else(|| AppError::Io("無法取得 ~/.claude/skills 路徑".into()))?;
 
-    // 白名單：只允許 "global" 與「已加入專案」的路徑，杜絕寫入未註冊目錄。
-    let allowed: std::collections::HashSet<String> = project_manager::list_projects(&data_dir)
-        .into_iter()
-        .map(|p| p.path)
-        .collect();
+    // 白名單：只允許 "global" 與「已加入專案」的路徑，杜絕寫入未註冊目錄；
+    // 再以 vault 閘排除「path 在 vault 內」的存量專案（拒絕者併入 invalid_targets 回報）。
+    let (allowed, excluded) = partition_allowed_targets(
+        project_manager::list_projects(&data_dir).into_iter().map(|p| p.path).collect(),
+        Some(&vault_root),
+    );
+    let blocked = blocked_vault_targets(excluded, &selections);
     let pairs: Vec<(String, String)> = selections
         .into_iter()
         .filter(|s| s.target == "global" || allowed.contains(&s.target))
@@ -189,7 +218,7 @@ pub async fn distribute_skills_selective(
         skill_count: res.skill_count,
         repo_count: res.repo_count,
         written_count: res.written.len(),
-        invalid_targets: res.invalid_targets,
+        invalid_targets: res.invalid_targets.into_iter().chain(blocked).collect(),
     })
 }
 
@@ -216,10 +245,13 @@ pub async fn undistribute_skills(
     let claude_dir = fs_utils::global_claude_skills_dir()
         .ok_or_else(|| AppError::Io("無法取得 ~/.claude/skills 路徑".into()))?;
 
-    let allowed: std::collections::HashSet<String> = project_manager::list_projects(&data_dir)
-        .into_iter()
-        .map(|p| p.path)
-        .collect();
+    // 與分發同一道 vault 閘：取消分發會刪 target 下的 skills 目錄，同屬寫入型操作。
+    let vault_root = vault_manager::get_vault_config(&data_dir).vault_path;
+    let (allowed, excluded) = partition_allowed_targets(
+        project_manager::list_projects(&data_dir).into_iter().map(|p| p.path).collect(),
+        vault_root.as_deref(),
+    );
+    let blocked = blocked_vault_targets(excluded, &selections);
     let pairs: Vec<(String, String)> = selections
         .into_iter()
         .filter(|s| s.target == "global" || allowed.contains(&s.target))
@@ -230,6 +262,50 @@ pub async fn undistribute_skills(
         skill_count: res.skill_count,
         target_count: res.target_count,
         removed_count: res.removed.len(),
-        invalid_targets: res.invalid_targets,
+        invalid_targets: res.invalid_targets.into_iter().chain(blocked).collect(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_partition_allowed_targets_excludes_vault_paths() {
+        // 存量 vault 專案（等於根/子路徑/大小寫變體）→ 排除；正常專案 → 白名單
+        let base = std::env::temp_dir().join(format!("amagi-skilltgt-{}", uuid::Uuid::new_v4()));
+        let vault = base.join("vault");
+        let sub = vault.join("projects").join("x");
+        let proj = base.join("proj");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::create_dir_all(&proj).unwrap();
+
+        let vs = vault.to_string_lossy().to_string();
+        let paths = vec![
+            vs.clone(),
+            sub.to_string_lossy().to_string(),
+            vs.to_uppercase(),
+            proj.to_string_lossy().to_string(),
+        ];
+        let (allowed, excluded) = partition_allowed_targets(paths, Some(&vs));
+        assert_eq!(allowed.len(), 1, "只有 vault 外專案入白名單");
+        assert!(allowed.contains(&proj.to_string_lossy().to_string()));
+        assert_eq!(excluded.len(), 3, "vault 根/子路徑/大小寫變體皆排除");
+
+        // vault 未設定 → 全放行
+        let (allowed2, excluded2) = partition_allowed_targets(
+            vec![vs.clone()], None);
+        assert_eq!(allowed2.len(), 1);
+        assert!(excluded2.is_empty());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn test_blocked_vault_targets_only_reports_selected() {
+        let sel = vec![SkillSelectionDto { skill_slug: "s".into(), target: "C:\\v".into() }];
+        let blocked = blocked_vault_targets(vec!["C:\\v".into(), "C:\\other".into()], &sel);
+        assert_eq!(blocked.len(), 1, "只回報本次被勾選的排除 target");
+        assert!(blocked[0].contains("C:\\v") && blocked[0].contains("已拒絕"));
+    }
 }

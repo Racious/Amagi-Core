@@ -306,6 +306,19 @@ fn skill_dest_paths(skills_root: &Path, skills: &[&ReviewItem]) -> Vec<PathBuf> 
     }).collect()
 }
 
+/// 共用防守閘（2026-07-03 事故）：project_path 等於 vault 根、或位於其下 → Err。
+/// 凡「以 project_path 為根寫檔」的路徑（sync 內聯重寫、promote 衍生物刷新等）
+/// 皆須在**任何寫入/搬檔前**過此閘，fail-closed。
+pub fn ensure_project_outside_vault(vault_root: &Path, project_path: &str) -> Result<(), AppError> {
+    if fs_utils::is_same_or_under(vault_root, Path::new(project_path)) {
+        return Err(AppError::InvalidPath(format!(
+            "專案路徑「{project_path}」位於 Amagi-Vault 知識庫內，拒絕寫入——\
+             vault 是知識庫、非專案，請自專案清單移除該項目。"
+        )));
+    }
+    Ok(())
+}
+
 pub fn sync_agent_files(
     project_path: &str,
     vault_folder: Option<&str>,
@@ -313,6 +326,12 @@ pub fn sync_agent_files(
     accepted: &[ReviewItem],
     all_project_memory: &[ReviewItem],
 ) -> Result<SyncResult, AppError> {
+    // 防守深度（2026-07-03 事故）：project_path 落在 vault 內（例：vault 被註冊成專案的
+    // 存量資料）→ 拒寫，否則下方會把 vault 根 CLAUDE.md/AGENTS.md 覆寫成專案指針。
+    // 第一道閘在 add_project；此處擋「閘前已註冊」與其他呼叫路徑。
+    if let Some(vroot) = vault_root {
+        ensure_project_outside_vault(vroot, project_path)?;
+    }
     let mut written: Vec<String> = Vec::new();
     // 優先用顯式 Project.vault_folder（權威來源）；缺時才由路徑 basename 推導。
     let vault_folder = vault_folder
@@ -823,6 +842,63 @@ mod tests {
         std::fs::remove_dir_all(vault.join("_skills").join("my-skill")).unwrap();
         sync_agent_files(proj.to_str().unwrap(), Some("projects/p"), Some(&vault), &[], &[]).unwrap();
         assert!(!dest.exists(), "vault 刪除的技能不得被 sync 復活");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_ensure_project_outside_vault_guard() {
+        // promote_memory 等「以 project_path 為根寫檔」路徑共用的防守閘（Codex 高 #1 回歸）。
+        // command 層需 State 無法直測，此處直測其呼叫的底層閘；
+        // 「搬檔前先過閘」由 promote_memory 內呼叫順序保證（閘在 promote_memory_to_shared 之前）。
+        let root = std::env::temp_dir().join(format!("amagi-guard-{}", uuid::Uuid::new_v4()));
+        let vault = root.join("vault");
+        let sub = vault.join("projects").join("x");
+        std::fs::create_dir_all(&sub).unwrap();
+
+        assert!(ensure_project_outside_vault(&vault, vault.to_str().unwrap()).is_err(), "vault 根應拒");
+        assert!(ensure_project_outside_vault(&vault, sub.to_str().unwrap()).is_err(), "vault 子路徑應拒");
+        #[cfg(windows)]
+        assert!(ensure_project_outside_vault(&vault, &vault.to_string_lossy().to_uppercase()).is_err(),
+            "大小寫變體應拒");
+
+        let proj = root.join("proj");
+        std::fs::create_dir_all(&proj).unwrap();
+        assert!(ensure_project_outside_vault(&vault, proj.to_str().unwrap()).is_ok(), "vault 外專案應過");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_sync_rejects_project_path_inside_vault() {
+        // 防守深度（2026-07-03 事故）：project_path 等於/位於 vault 根 → 拒寫，
+        // 不得把 vault 根 CLAUDE.md/AGENTS.md 覆寫成專案指針。
+        let root = std::env::temp_dir().join(format!("amagi-sync-invault-{}", uuid::Uuid::new_v4()));
+        let vault = root.join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        std::fs::write(vault.join("CLAUDE.md"), "# Wiki 規範源頭").unwrap();
+
+        // vault 根本身
+        let r = sync_agent_files(vault.to_str().unwrap(), Some("projects/vault"), Some(&vault), &[], &[]);
+        assert!(r.is_err(), "vault 根作為 project_path 應被拒");
+        // vault 內子路徑
+        let sub = vault.join("projects").join("x");
+        std::fs::create_dir_all(&sub).unwrap();
+        assert!(sync_agent_files(sub.to_str().unwrap(), Some("projects/x"), Some(&vault), &[], &[]).is_err(),
+            "vault 子路徑作為 project_path 應被拒");
+        // 大小寫變體
+        #[cfg(windows)]
+        assert!(sync_agent_files(&vault.to_string_lossy().to_uppercase(), Some("projects/vault"), Some(&vault), &[], &[]).is_err(),
+            "vault 路徑大小寫變體應被拒");
+        // vault 根 CLAUDE.md 未被動過
+        assert_eq!(std::fs::read_to_string(vault.join("CLAUDE.md")).unwrap(), "# Wiki 規範源頭",
+            "vault 根 CLAUDE.md 不得被覆寫");
+
+        // 正常專案（vault 外）→ 通過
+        let proj = root.join("proj");
+        std::fs::create_dir_all(&proj).unwrap();
+        assert!(sync_agent_files(proj.to_str().unwrap(), Some("projects/p"), Some(&vault), &[], &[]).is_ok(),
+            "vault 外的正常專案應可同步");
+
         let _ = std::fs::remove_dir_all(&root);
     }
 

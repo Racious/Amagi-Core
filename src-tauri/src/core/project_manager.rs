@@ -11,6 +11,10 @@ pub fn add_project(path: &str, data_dir: &Path) -> Result<Project, AppError> {
     if !Path::new(path).exists() {
         return Err(AppError::InvalidPath(format!("路徑不存在：{}", path)));
     }
+    // 註冊閘（2026-07-03 事故）：vault 根（或其內任何路徑）被註冊成專案後，
+    // sync/init 會把 vault 根 CLAUDE.md（Wiki 規範源頭）整檔覆寫成專案指針。
+    // canonical 比對吸收大小寫/斜線/symlink 變體。
+    reject_path_inside_vault(path, data_dir)?;
     if !fs_utils::is_git_repo(path) {
         return Err(AppError::InvalidPath(format!("不是 Git 儲存庫：{}", path)));
     }
@@ -46,6 +50,20 @@ pub fn add_project(path: &str, data_dir: &Path) -> Result<Project, AppError> {
     Ok(project)
 }
 
+/// 專案路徑等於 vault 根、或位於 vault 根之下 → 拒絕（vault 是知識庫，非專案）。
+/// vault 未設定 → 放行（無從比對；本閘只防「把知識庫當專案」的誤用）。
+fn reject_path_inside_vault(path: &str, data_dir: &Path) -> Result<(), AppError> {
+    if let Some(vp) = crate::core::vault_manager::get_vault_config(data_dir).vault_path {
+        if fs_utils::is_same_or_under(Path::new(&vp), Path::new(path)) {
+            return Err(AppError::InvalidPath(format!(
+                "此路徑位於 Amagi-Vault 知識庫內（vault：{vp}）。vault 是知識庫、非專案，\
+                 不可註冊為專案——否則同步會覆寫 vault 根的 CLAUDE.md 等規範文件。"
+            )));
+        }
+    }
+    Ok(())
+}
+
 pub fn list_projects(data_dir: &Path) -> Vec<Project> {
     let store_path = data_dir.join("projects.json");
     let data: ProjectsData = json_store::read_json_or_default(&store_path);
@@ -69,7 +87,18 @@ pub fn remove_project(project_id: &str, data_dir: &Path) -> Result<(), AppError>
     json_store::write_json(&store_path, &data)
 }
 
-pub fn init_project(project: &Project) -> Result<InitResult, AppError> {
+pub fn init_project(project: &Project, vault_root: Option<&Path>) -> Result<InitResult, AppError> {
+    // 防守深度（2026-07-03 事故）：專案路徑落在 vault 內 → 拒建，
+    // 否則會在 vault 根生成 AGENTS.md、覆寫規範文件（第一道閘在 add_project，此處擋存量資料）。
+    if let Some(vroot) = vault_root {
+        if fs_utils::is_same_or_under(vroot, Path::new(&project.path)) {
+            return Err(AppError::InvalidPath(format!(
+                "專案路徑「{}」位於 Amagi-Vault 知識庫內，拒絕初始化——\
+                 vault 是知識庫、非專案，請自專案清單移除該項目。",
+                project.path
+            )));
+        }
+    }
     let base = Path::new(&project.path).join(".amagi");
     let dirs = ["memory", "pending", "skills", "history", "artifacts", "state"];
 
@@ -407,6 +436,97 @@ mod tests {
         }
     }
 
+    /// 建 temp 沙盒：data_dir（含指向 vault 的 vault.json）+ vault git repo + 正常專案 git repo。
+    fn vault_guard_sandbox() -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+        let base = std::env::temp_dir().join(format!("amagi-vguard-{}", Uuid::new_v4()));
+        let data_dir = base.join("data");
+        let vault = base.join("vault");
+        let repo = base.join("repo");
+        for d in [&data_dir, &vault.join(".git"), &repo.join(".git")] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        json_store::write_json(
+            &data_dir.join("vault.json"),
+            &crate::core::vault_manager::VaultConfig {
+                vault_path: Some(vault.to_string_lossy().to_string()),
+                pointer_written: true,
+            },
+        ).unwrap();
+        (base, data_dir, vault)
+    }
+
+    #[test]
+    fn test_add_project_rejects_vault_root_and_children() {
+        let (base, data_dir, vault) = vault_guard_sandbox();
+
+        // vault 根本身 → 拒絕
+        let err = add_project(&vault.to_string_lossy(), &data_dir).unwrap_err();
+        assert!(format!("{err:?}").contains("知識庫"), "錯誤訊息應說明 vault 是知識庫非專案：{err:?}");
+
+        // vault 根之下的子路徑（本身也是 git repo）→ 拒絕
+        let sub = vault.join("projects").join("inner");
+        std::fs::create_dir_all(sub.join(".git")).unwrap();
+        assert!(add_project(&sub.to_string_lossy(), &data_dir).is_err(), "vault 子路徑應被拒");
+
+        // 大小寫變體（Windows 同一目錄）→ 拒絕
+        #[cfg(windows)]
+        {
+            let upper = vault.to_string_lossy().to_uppercase();
+            assert!(add_project(&upper, &data_dir).is_err(), "vault 路徑大小寫變體應被拒");
+        }
+
+        // 尾斜線變體 → 拒絕
+        let trailing = format!("{}\\", vault.to_string_lossy());
+        assert!(add_project(&trailing, &data_dir).is_err(), "vault 路徑尾斜線變體應被拒");
+
+        // 正常專案 → 通過
+        let repo = base.join("repo");
+        assert!(add_project(&repo.to_string_lossy(), &data_dir).is_ok(), "正常專案應可註冊");
+
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn test_add_project_without_vault_config_unaffected() {
+        // vault 未設定 → 閘不生效，正常註冊
+        let base = std::env::temp_dir().join(format!("amagi-vguard-nocfg-{}", Uuid::new_v4()));
+        let data_dir = base.join("data");
+        let repo = base.join("repo");
+        std::fs::create_dir_all(&data_dir).unwrap();
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        assert!(add_project(&repo.to_string_lossy(), &data_dir).is_ok());
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn test_init_project_rejects_path_inside_vault() {
+        // 防守深度：專案路徑等於/位於 vault 根 → 拒建，vault 根不得長出 AGENTS.md/.amagi
+        let base = std::env::temp_dir().join(format!("amagi-initguard-{}", Uuid::new_v4()));
+        let vault = base.join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        std::fs::write(vault.join("CLAUDE.md"), "# Wiki 規範源頭").unwrap();
+
+        // vault 根本身
+        let p_root = make_project(&vault);
+        assert!(init_project(&p_root, Some(&vault)).is_err(), "vault 根應拒絕初始化");
+        // vault 內子路徑
+        let sub = vault.join("projects").join("x");
+        std::fs::create_dir_all(&sub).unwrap();
+        assert!(init_project(&make_project(&sub), Some(&vault)).is_err(), "vault 子路徑應拒絕初始化");
+        // vault 未被污染
+        assert!(!vault.join("AGENTS.md").exists(), "vault 根不得生成 AGENTS.md");
+        assert!(!vault.join(".amagi").exists(), "vault 根不得生成 .amagi");
+        assert_eq!(std::fs::read_to_string(vault.join("CLAUDE.md")).unwrap(), "# Wiki 規範源頭",
+            "vault 根 CLAUDE.md 不得被覆寫");
+
+        // vault 外正常專案 → 通過
+        let repo = base.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        assert!(init_project(&make_project(&repo), Some(&vault)).is_ok(), "vault 外專案應可初始化");
+
+        std::fs::remove_dir_all(&base).ok();
+    }
+
     #[test]
     fn test_pending_without_config_is_not_initialized() {
         // agent 在 init 前自建 .amagi/pending/ 草稿，不得誤判為已初始化
@@ -427,7 +547,7 @@ mod tests {
         let project = make_project(&root);
 
         assert!(!get_project_info(&project).initialized);
-        init_project(&project).unwrap();
+        init_project(&project, None).unwrap();
         assert!(get_project_info(&project).initialized, "init_project 後 config.json 存在，應視為已初始化");
 
         std::fs::remove_dir_all(&root).ok();
@@ -442,12 +562,12 @@ mod tests {
         std::fs::write(&draft, "既有草稿內容").unwrap();
         let project = make_project(&root);
 
-        let first = init_project(&project).unwrap();
+        let first = init_project(&project, None).unwrap();
         assert!(root.join(".amagi").join("config.json").is_file());
         assert!(!first.created_dirs.iter().any(|d| d.ends_with("pending")), "既有 pending 目錄不應重建");
         assert_eq!(std::fs::read_to_string(&draft).unwrap(), "既有草稿內容", "init 不得覆寫既有草稿");
 
-        let second = init_project(&project).unwrap();
+        let second = init_project(&project, None).unwrap();
         assert!(second.created_dirs.is_empty(), "重跑 init 不應再建目錄");
         assert!(second.created_files.is_empty(), "重跑 init 不應再建檔案");
 
