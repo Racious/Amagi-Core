@@ -31,7 +31,17 @@
               <StatusBadge v-if="item.status !== 'pending'" :status="item.status" />
               <span class="font-bold text-sm text-fg">{{ item.title }}</span>
             </div>
-            <div class="text-sm text-muted whitespace-pre-wrap">{{ item.content }}</div>
+            <!-- 命中檔行（📄 前綴，與 learn_engine::blocked_item 輸出格式耦合）直接渲染為可點連結
+                 → reveal_in_explorer 開檔案總管並選中（後端已含相對路徑安全驗證）；其餘行照舊文字 -->
+            <div class="text-sm text-muted">
+              <template v-for="(line, i) in item.content.split('\n')" :key="i">
+                <button v-if="fileLineOf(line)" type="button" class="file-link"
+                        :title="'在檔案總管中開啟 ' + fileLineOf(line)"
+                        @click="openBlockedFile(item, fileLineOf(line)!)">📄 {{ fileLineOf(line) }}</button>
+                <div v-else class="whitespace-pre-wrap content-line">{{ line }}</div>
+              </template>
+            </div>
+            <div v-if="revealMsg" class="text-xs mt-2" style="color: var(--c-danger);">{{ revealMsg }}</div>
             <div class="flex justify-end mt-3 pt-3 border-t border-border">
               <button @click="discardBlocked(item)" :disabled="reviewStore.loading"
                       class="btn btn-danger btn-sm">🗑 確認丟棄</button>
@@ -93,14 +103,33 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { ask } from '@tauri-apps/plugin-dialog'
 import { useReviewStore } from '../stores/reviewStore'
-import type { ReviewItem } from '../api/tauriCommands'
+import { api, type ReviewItem } from '../api/tauriCommands'
 import ReviewItemCard from '../components/ReviewItemCard.vue'
 import StatusBadge from '../components/StatusBadge.vue'
 
 const reviewStore = useReviewStore()
+const revealMsg = ref('')
+
+/// 命中檔行判定：「📄 <path>」行回傳路徑，否則 null（格式由 learn_engine 產生、確定性）
+function fileLineOf(line: string): string | null {
+  const t = line.trim()
+  if (!t.startsWith('📄 ')) return null
+  const p = t.slice(2).trim()
+  return p || null
+}
+
+async function openBlockedFile(item: ReviewItem, relPath: string) {
+  revealMsg.value = ''
+  try {
+    await api.revealInExplorer(item.projectId, relPath)
+  } catch (e: any) {
+    // 常見情境：檔案已被修正/刪除、或專案已移除 → 誠實顯示，不阻斷其他操作
+    revealMsg.value = `開啟失敗：${e?.message ?? e}`
+  }
+}
 
 // 封鎖項獨立成塊（唯讀 + 確認丟棄）；一般待審清單不含 blocked，「全部接受/忽略」也就碰不到它。
 // 收「全部狀態」的 blocked（Codex R2）：舊版 queue.json 可能殘留 Accepted（G1 歷史殭屍）/
@@ -146,3 +175,20 @@ async function ignoreAll() {
   await reviewStore.ignore(ids)
 }
 </script>
+
+<style scoped>
+/* 命中檔連結：像檔案連結般可點（hover 底線＋accent 色），對齊卡片內文字排版 */
+.file-link {
+  display: block;
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  color: var(--c-accent);
+}
+.file-link:hover { text-decoration: underline; }
+/* 空行也要佔行高，維持原 pre-wrap 的段落間距 */
+.content-line { min-height: 1.25em; }
+</style>

@@ -14,11 +14,11 @@
       </select>
     </div>
 
+    <!-- 單一入口（2026-07-03 合併）：learn 後端內部本就自行掃 git，獨立「掃描」鈕為冗餘；
+         變更概要改為學習後自動附上（見下方 Diff 摘要卡） -->
     <div class="flex gap-3 mb-4">
-      <button @click="doScan" :disabled="!selectedId || loading"
-              class="btn btn-ghost disabled:opacity-50">掃描 Git 變更</button>
       <button @click="doLearn" :disabled="!selectedId || loading"
-              class="btn btn-primary disabled:opacity-50">產生候選記憶</button>
+              class="btn btn-primary disabled:opacity-50">{{ loading ? '學習中…' : '開始學習' }}</button>
     </div>
 
     <div v-if="error" class="alert tone-danger mb-4">
@@ -72,19 +72,6 @@ const error = ref<string | null>(null)
 const scanResult = ref<ScanResult | null>(null)
 const learnResult = ref<LearnResult | null>(null)
 
-async function doScan() {
-  if (!selectedId.value) return
-  loading.value = true
-  error.value = null
-  try {
-    scanResult.value = await api.scanProject(selectedId.value)
-  } catch (e: any) {
-    error.value = e?.message ?? String(e)
-  } finally {
-    loading.value = false
-  }
-}
-
 async function doLearn() {
   if (!selectedId.value) return
   loading.value = true
@@ -92,6 +79,10 @@ async function doLearn() {
   try {
     learnResult.value = await api.learnFromProject(selectedId.value)
     await reviewStore.fetchItems()
+    // 變更概要（分支/diff 概要/最近提交）學習後自動附上——純顯示資訊，失敗不影響學習結果
+    try {
+      scanResult.value = await api.scanProject(selectedId.value)
+    } catch { /* 概要卡缺席即可，不蓋掉學習成功訊息 */ }
   } catch (e: any) {
     error.value = e?.message ?? String(e)
   } finally {
