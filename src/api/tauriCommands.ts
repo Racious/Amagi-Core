@@ -195,6 +195,8 @@ export interface VaultSetResult {
   claudeMdPath: string
   backupMade: boolean
   pointerAction: 'appended' | 'replaced'
+  /** vault 內是否有全域 doctrine 源檔（general/_meta/global-agent-config.md）；供設路徑後提議自動部署 */
+  hasDoctrineSource: boolean
 }
 
 export interface DeployResult {

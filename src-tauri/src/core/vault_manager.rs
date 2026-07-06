@@ -28,6 +28,9 @@ pub struct VaultSetResult {
     pub backup_made: bool,
     /// "appended"（首次附加）或 "replaced"（替換既有受管區塊）。
     pub pointer_action: String,
+    /// vault 內是否存在全域 doctrine 源檔（`general/_meta/global-agent-config.md`）。
+    /// 為 true 時前端可於設路徑後跳確認、順手部署全域 doctrine（步驟5 自動化，A 案）。
+    pub has_doctrine_source: bool,
 }
 
 fn config_path(data_dir: &Path) -> PathBuf {
@@ -73,6 +76,14 @@ pub fn get_vault_status(data_dir: &Path) -> VaultStatus {
     }
 }
 
+/// vault 內是否存在全域 doctrine 源檔（`general/_meta/global-agent-config.md`）。
+/// 抽為純函式以可單元測試——不觸發 `set_vault_path` 的全域檔寫入，避免測試污染家目錄。
+fn detect_doctrine_source(vault_path: &Path) -> bool {
+    vault_path
+        .join("general").join("_meta").join("global-agent-config.md")
+        .is_file()
+}
+
 /// 設定本機 vault 路徑：
 /// 1. 驗證資料夾存在
 /// 2. 組受管區塊並過安全過濾
@@ -116,12 +127,16 @@ pub fn set_vault_path(path: &str, data_dir: &Path) -> Result<VaultSetResult, App
     };
     json_store::write_json(&config_path(data_dir), &cfg)?;
 
+    // 偵測全域 doctrine 源檔是否就位（供前端決定是否提議自動部署，步驟5 A 案）。
+    let has_doctrine_source = detect_doctrine_source(p);
+
     Ok(VaultSetResult {
         vault_path: path.to_string(),
         looks_like_vault,
         claude_md_path: claude_md.to_string_lossy().to_string(),
         backup_made,
         pointer_action,
+        has_doctrine_source,
     })
 }
 
@@ -455,6 +470,20 @@ mod tests {
         let (out, action) = splice_managed_block("", &block);
         assert_eq!(action, "appended");
         assert!(out.contains("# Amagi-Vault 知識庫"));
+    }
+
+    #[test]
+    fn test_detect_doctrine_source() {
+        // ④ 偵測邏輯的可測核心：源檔存在→true、不存在→false（純函式，不觸全域檔寫入）
+        let base = std::env::temp_dir().join(format!("amagi-doctrinesrc-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&base).unwrap();
+        assert!(!detect_doctrine_source(&base), "無源檔應為 false");
+        let meta = base.join("general").join("_meta");
+        std::fs::create_dir_all(&meta).unwrap();
+        assert!(!detect_doctrine_source(&base), "只有 _meta 目錄、無檔仍為 false");
+        std::fs::write(meta.join("global-agent-config.md"), "# doctrine").unwrap();
+        assert!(detect_doctrine_source(&base), "源檔就位應為 true");
+        std::fs::remove_dir_all(&base).ok();
     }
 
     #[test]

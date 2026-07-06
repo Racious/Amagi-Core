@@ -190,6 +190,29 @@ async function chooseVault() {
     if (!r.looksLikeVault) {
       vaultWarn.value = '提醒：該資料夾未偵測到 CLAUDE.md / index.md，可能尚未初始化為 vault。'
     }
+    // 步驟5 自動化（A 案）：偵測到 vault 內有全域 doctrine 源檔時，提議順手部署，
+    // 省去手動再按「同步全域」一步。破壞性整檔覆蓋，仍以確認對話把關、老爺可婉拒。
+    if (r.hasDoctrineSource) {
+      const go = await ask(
+        '偵測到此 vault 內有全域 doctrine（general/_meta/global-agent-config.md）。\n'
+          + '要現在「整檔覆蓋」部署到 ~/.claude/CLAUDE.md 與 ~/.codex/AGENTS.md 嗎？\n'
+          + '（首次保留 .predeploy.bak、每次留 .bak，可還原；亦可稍後手動按「同步全域 doctrine」）',
+        { title: '一併部署全域 doctrine？', kind: 'info' }
+      )
+      if (go) {
+        // 獨立 try/catch（r1 低風險）：vault 已設定成功，失敗的僅是後續一併部署，
+        // 訊息須如實區分，不可落入外層 catch 誤報「設定失敗」。
+        // 期間設 deployBusy 防止手動「同步全域」按鈕重入同一破壞性覆寫流程。
+        deployBusy.value = true
+        try {
+          await applyDoctrineDeploy()
+        } catch (e: any) {
+          vaultWarn.value = `vault 已設定，但一併部署全域 doctrine 失敗（未寫入）：${e?.message ?? e}`
+        } finally {
+          deployBusy.value = false
+        }
+      }
+    }
   } catch (e: any) {
     vaultWarn.value = `設定失敗：${e?.message ?? e}`
   } finally {
@@ -199,6 +222,14 @@ async function chooseVault() {
 
 // ── 步驟5：同步全域 doctrine（整檔部署）──────────────
 const deployBusy = ref(false)
+
+/** 實際呼叫部署並更新訊息（不含確認對話）；供手動鈕與設路徑後自動提議共用。 */
+async function applyDoctrineDeploy() {
+  const r = await api.deployGlobalDoctrine()
+  vaultMsg.value = `已部署全域 doctrine：\n・${r.claudePath}\n・${r.codexPath}`
+    + (r.backupMade ? '\n（首次原始版存於 <檔>.predeploy.bak、前一版存於 <檔>.bak，可還原）' : '')
+  if (r.warnings.length) vaultWarn.value = r.warnings.join('\n')
+}
 
 async function deployDoctrine() {
   vaultMsg.value = ''
@@ -210,10 +241,7 @@ async function deployDoctrine() {
   if (!ok) return
   deployBusy.value = true
   try {
-    const r = await api.deployGlobalDoctrine()
-    vaultMsg.value = `已部署全域 doctrine：\n・${r.claudePath}\n・${r.codexPath}`
-      + (r.backupMade ? '\n（首次原始版存於 <檔>.predeploy.bak、前一版存於 <檔>.bak，可還原）' : '')
-    if (r.warnings.length) vaultWarn.value = r.warnings.join('\n')
+    await applyDoctrineDeploy()
   } catch (e: any) {
     vaultWarn.value = `部署失敗（未寫入）：${e?.message ?? e}`
   } finally {
