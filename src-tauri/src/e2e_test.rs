@@ -441,8 +441,25 @@ fn e2e_remove_project() {
     let project = project_manager::add_project(&sb.repo_str(), &sb.data_dir).unwrap();
     assert_eq!(project_manager::list_projects(&sb.data_dir).len(), 1);
 
+    // 種佇列項：本專案 2 筆 + 他專案 1 筆——驗證 remove_project「連帶清佇列」的接線
+    // （既有測試只驗專案消失、未驗佇列被清；此為補上的整合覆蓋）。
+    let mk = |pid: &str, id: &str| ReviewItem {
+        id: id.into(), project_id: pid.into(), item_type: ReviewItemType::Memory,
+        category: "feedback".into(), title: id.into(), content: "x".into(),
+        risk: RiskLevel::Low, status: ReviewStatus::Pending, sync_targets: vec![],
+        sync_scope: SyncScope::Project, source_pending_file: None,
+        created_at: chrono::Utc::now(), reviewed_at: None,
+    };
+    review_queue::add_items(&sb.data_dir, vec![
+        mk(&project.id, "own-1"), mk(&project.id, "own-2"), mk("other-proj", "keep-1"),
+    ]).unwrap();
+
     project_manager::remove_project(&project.id, &sb.data_dir).unwrap();
     assert!(project_manager::list_projects(&sb.data_dir).is_empty());
+    // 接線驗證：本專案佇列項應全清（孤兒項不再殘留）、他專案項不得被誤清。
+    let remaining = review_queue::list_items(&sb.data_dir, None);
+    assert!(!remaining.iter().any(|i| i.project_id == project.id), "移除專案應連帶清其佇列殘項");
+    assert!(remaining.iter().any(|i| i.id == "keep-1"), "他專案佇列項不得被誤清");
 
     // 移除不存在的 → Err
     assert!(project_manager::remove_project("ghost-id", &sb.data_dir).is_err());

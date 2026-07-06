@@ -150,6 +150,22 @@ pub fn discard_blocked_items(data_dir: &Path, ids: &[String]) -> Result<usize, A
     Ok(removed)
 }
 
+/// 移除專案時連帶清除該專案在佇列中的所有殘留項（資料衛生，2026-07-03 批測發現④）：
+/// 專案自 projects.json 移除後，其 `project_id` 的佇列項再也無法從 UI 觸及，卻仍佔 queue.json
+/// （只增不減的孤兒項）。此函式按 project_id 一次清乾淨——不分型別/狀態，因該專案的所有項目
+/// 皆已隨專案失去意義。回傳實際移除筆數。
+pub fn remove_items_of_project(data_dir: &Path, project_id: &str) -> Result<usize, AppError> {
+    let path = queue_path(data_dir);
+    let mut data: ReviewQueueData = json_store::read_json_or_default(&path);
+    let before = data.items.len();
+    data.items.retain(|i| i.project_id != project_id);
+    let removed = before - data.items.len();
+    if removed > 0 {
+        json_store::write_json(&path, &data)?;
+    }
+    Ok(removed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -315,6 +331,30 @@ mod tests {
         assert_eq!(migrate_drop_synced_items(&dir).unwrap(), 1, "備份已存在仍應完成清除");
         assert_eq!(std::fs::read_to_string(&backup).unwrap(), "既有快照", "既有備份不得被覆蓋");
         assert!(list_items(&dir, None).is_empty(), "Synced 項應被清");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_remove_items_of_project_clears_only_that_project() {
+        let dir = std::env::temp_dir().join(format!("amagi-rq-proj-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // proj-A 混多型別/多狀態，proj-B 為他專案；移除 proj-A 應清乾淨、不誤傷 proj-B
+        let mut a1 = item("a1", ReviewItemType::Memory, ReviewStatus::Pending);
+        a1.project_id = "proj-A".into();
+        let mut a2 = item("a2", ReviewItemType::Blocked, ReviewStatus::Pending);
+        a2.project_id = "proj-A".into();
+        let mut a3 = item("a3", ReviewItemType::Skill, ReviewStatus::Accepted);
+        a3.project_id = "proj-A".into();
+        let mut b1 = item("b1", ReviewItemType::Memory, ReviewStatus::Accepted);
+        b1.project_id = "proj-B".into();
+        add_items(&dir, vec![a1, a2, a3, b1]).unwrap();
+        let removed = remove_items_of_project(&dir, "proj-A").unwrap();
+        assert_eq!(removed, 3, "proj-A 的所有型別/狀態項皆應清除");
+        let items = list_items(&dir, None);
+        assert!(!items.iter().any(|i| i.project_id == "proj-A"), "proj-A 不得殘留孤兒項");
+        assert!(items.iter().any(|i| i.id == "b1"), "他專案項不受影響");
+        // 冪等：再清一次為 0
+        assert_eq!(remove_items_of_project(&dir, "proj-A").unwrap(), 0, "冪等：無殘留即 0");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

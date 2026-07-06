@@ -84,7 +84,15 @@ pub fn remove_project(project_id: &str, data_dir: &Path) -> Result<(), AppError>
     if data.projects.len() == before {
         return Err(AppError::ProjectNotFound(project_id.to_string()));
     }
-    json_store::write_json(&store_path, &data)
+    json_store::write_json(&store_path, &data)?;
+    // 連帶清佇列殘項（2026-07-03 批測發現④）為 best-effort 資料衛生（r1 中風險裁決）：
+    // 專案移除才是使用者意圖，projects.json 已成功寫入；即使佇列清理失敗也不讓整個操作回報失敗——
+    // 否則專案已移除、UI 卻顯示失敗，且再移除同 id 會撞 ProjectNotFound 提早返回而永遠無法重試清理。
+    // 罕見 IO 失敗下殘留的孤兒項不比本功能實作前更糟；失敗僅記錄，不阻斷。
+    if let Err(e) = crate::core::review_queue::remove_items_of_project(data_dir, project_id) {
+        eprintln!("[AMAGI] 專案 {project_id} 已移除，但佇列殘項清理失敗（孤兒項殘留）：{e}");
+    }
+    Ok(())
 }
 
 pub fn init_project(project: &Project, vault_root: Option<&Path>) -> Result<InitResult, AppError> {
