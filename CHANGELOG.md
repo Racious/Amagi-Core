@@ -2,6 +2,22 @@
 
 AMAGI Core 的所有重要變更記錄於此。版本遵循語意化版號（major.minor.patch）。
 
+## v0.8.2
+
+vault 路徑防護閘 ＋ 移除專案連帶清佇列殘項 ＋ 設 vault 路徑偵測 doctrine 源檔並提議一併部署。全數經 Codex 交叉審查與實機驗證。
+
+### 功能
+- **設 vault 路徑偵測 doctrine 源檔、提議一併部署**：`set_vault_path` 偵測 vault 內 `general/_meta/global-agent-config.md`（回傳 `hasDoctrineSource`）。設定頁選定 vault 後若偵測到源檔，跳確認對話提議一併「同步全域 doctrine」（破壞性整檔覆蓋須經確認、可婉拒）；首次啟動引導新增 inline 可選步驟「部署全域 doctrine」，補齊新機首啟一步就緒的主要場景。自動部署失敗訊息與「設定失敗」分流、部署期間防重入。
+
+### 修正
+- **移除專案連帶清佇列殘項**：移除專案時一併清除該專案殘留在 `queue.json` 的所有項目（修批測發現④：孤兒項無法從 UI 觸及卻只增不減）。採 best-effort——清理失敗僅記錄、不阻斷專案移除（避免專案已移除卻回報失敗且無法重試）。
+
+### 安全
+- **vault 路徑防護閘**：拒絕將 Amagi-Vault 知識庫（vault 根或其下任一路徑）註冊或初始化為專案——否則同步會覆寫 vault 根 CLAUDE.md 等規範文件（修 2026-07-03 跨機事故）。六條寫入路徑防守深度（sync/init/promote/bridge×3/技能分發），canonical 比對 `is_same_or_under` fail-closed。
+
+### 品質
+- vault 路徑防護閘經 Codex 兩輪審（cargo test 176 綠）；本版 ①④ 經 Codex 交叉審查四輪全數閉合＋`guided-smoke-test` 實機七項逐一通過；cargo test 178 綠、vue-tsc 0 錯。
+
 ## v0.8.1
 
 封鎖卡可直接定位並開啟命中檔案＋學習頁單一入口。
