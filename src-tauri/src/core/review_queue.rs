@@ -135,6 +135,34 @@ pub fn update_item(data_dir: &Path, updated: ReviewItem) -> Result<ReviewItem, A
     }
 }
 
+/// hit 級部分靜音後的卡就地更新（adr-007 D1）：以殘餘命中覆寫 `blocked_hits` 與 content。
+/// 僅允許 Blocked 型別；殘餘為空應走 `discard_blocked_items` 出列而非本函式。
+/// 這是使用者勾選對話確認後的**主動顯式**改寫，非掃描時默默改寫（adr-007 §9 已決 3 界定）。
+pub fn update_blocked_hits(
+    data_dir: &Path,
+    item_id: &str,
+    residual: Vec<crate::models::review::BlockedHit>,
+    content: String,
+) -> Result<(), AppError> {
+    if residual.is_empty() {
+        return Err(AppError::InvalidPath("殘餘命中為空：全靜音應走出列，不得留空卡".into()));
+    }
+    let path = queue_path(data_dir);
+    let mut data: ReviewQueueData = json_store::read_json_or_default(&path);
+    match data
+        .items
+        .iter_mut()
+        .find(|i| i.item_type == ReviewItemType::Blocked && i.id == item_id)
+    {
+        Some(item) => {
+            item.blocked_hits = residual;
+            item.content = content;
+            json_store::write_json(&path, &data)
+        }
+        None => Err(AppError::InvalidPath(format!("找不到封鎖卡：{item_id}"))),
+    }
+}
+
 /// 「確認丟棄」封鎖項（實體出列）：僅移除 `Blocked` 型別且 id 命中者。
 /// Blocked 為純通知卡（safety_filter 不擋其他候選），丟棄無資料損失；
 /// 型別防護確保任意 id 也動不了 memory/skill/wiki。回傳實際移除筆數。
@@ -177,6 +205,7 @@ mod tests {
             category: "feedback".into(), title: id.into(), content: "x".into(),
             risk: RiskLevel::Low, status: s, sync_targets: vec![],
             sync_scope: SyncScope::Project, source_pending_file: None,
+            blocked_hits: vec![],
             created_at: Utc::now(), reviewed_at: None,
         }
     }
@@ -316,6 +345,34 @@ mod tests {
         let removed = discard_blocked_items(&dir, &["b-acc".to_string(), "b-ign".to_string()]).unwrap();
         assert_eq!(removed, 2, "Accepted/Ignored 封鎖殘留皆應可丟棄出列");
         assert!(list_items(&dir, None).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// adr-007 D1：hit 級部分靜音的卡就地更新——殘餘 hits 與 content 覆寫；
+    /// 空殘餘或 id 不存在 → Err（全靜音應走出列）。
+    #[test]
+    fn test_update_blocked_hits_partial_mute() {
+        use crate::models::review::BlockedHit;
+        let dir = std::env::temp_dir().join(format!("amagi-rq-upd-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let hit = |d: &str| BlockedHit {
+            file_path: Some("a.md".into()),
+            rule_label: "規則".into(),
+            masked: format!("{d}…（顯示）"),
+            value_digest: d.into(),
+        };
+        let mut b = item("b1", ReviewItemType::Blocked, ReviewStatus::Pending);
+        b.blocked_hits = vec![hit("d1"), hit("d2")];
+        add_items(&dir, vec![b]).unwrap();
+
+        let residual = vec![hit("d2")];
+        update_blocked_hits(&dir, "b1", residual.clone(), "殘餘內容".into()).unwrap();
+        let it = list_items(&dir, None).into_iter().find(|i| i.id == "b1").unwrap();
+        assert_eq!(it.blocked_hits, residual, "殘餘 hits 應覆寫");
+        assert_eq!(it.content, "殘餘內容", "content 應由殘餘重 render 後覆寫");
+
+        assert!(update_blocked_hits(&dir, "b1", vec![], "x".into()).is_err(), "空殘餘應走出列，不得留空卡");
+        assert!(update_blocked_hits(&dir, "ghost", vec![hit("d3")], "x".into()).is_err(), "不存在的卡應回錯");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

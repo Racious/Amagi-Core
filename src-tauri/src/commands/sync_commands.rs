@@ -316,6 +316,7 @@ mod tests {
             sync_targets: vec![],
             sync_scope: SyncScope::Project,
             source_pending_file: None,
+            blocked_hits: vec![],
             created_at: Utc::now(),
             reviewed_at: None,
         }

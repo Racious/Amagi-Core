@@ -84,6 +84,7 @@ fn mem_item(project_id: &str, category: &str, title: &str, content: &str, scope:
         sync_targets: vec![],
         sync_scope: scope,
         source_pending_file: None,
+        blocked_hits: vec![],
         created_at: chrono::Utc::now(),
         reviewed_at: None,
     }
@@ -102,6 +103,7 @@ fn skill_item(project_id: &str, title: &str, content: &str) -> ReviewItem {
         sync_targets: vec![],
         sync_scope: SyncScope::Project,
         source_pending_file: None,
+        blocked_hits: vec![],
         created_at: chrono::Utc::now(),
         reviewed_at: None,
     }
@@ -194,7 +196,7 @@ fn e2e_learn_review_sync_memory() {
     ];
     let added: String = (0..15).map(|i| format!("+第 {} 行新內容\n", i)).collect();
     let diff = format!("diff --git a/README.md b/README.md\n{}", added);
-    let candidates = learn_engine::generate_candidates(&project.id, &changed, "", &diff);
+    let candidates = learn_engine::generate_candidates(&project.id, &changed, "", &diff, &Default::default());
 
     assert!(candidates.iter().any(|c| c.category == "project_rule"));
     assert!(candidates.iter().any(|c| c.category == "tech_stack"));
@@ -421,7 +423,7 @@ fn e2e_conflict_gate_blocks_bad_memory() {
 fn e2e_safety_filter_blocks_secret_in_learn() {
     let changed = vec!["config.ts".to_string()];
     let diff = "diff --git a/config.ts b/config.ts\n+const apiKey = \"sk-abcdef0123456789secrettoken\"";
-    let candidates = learn_engine::generate_candidates("p-secret", &changed, "", diff);
+    let candidates = learn_engine::generate_candidates("p-secret", &changed, "", diff, &Default::default());
 
     let blocked = candidates
         .iter()
@@ -448,6 +450,7 @@ fn e2e_remove_project() {
         category: "feedback".into(), title: id.into(), content: "x".into(),
         risk: RiskLevel::Low, status: ReviewStatus::Pending, sync_targets: vec![],
         sync_scope: SyncScope::Project, source_pending_file: None,
+        blocked_hits: vec![],
         created_at: chrono::Utc::now(), reviewed_at: None,
     };
     review_queue::add_items(&sb.data_dir, vec![

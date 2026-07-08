@@ -45,6 +45,17 @@ pub enum ReviewStatus {
     Synced,
 }
 
+/// 封鎖卡的結構化命中（adr-007 §4.1）：權威資料，content 顯示文字由此 render。
+/// `value_digest` 為身分（正規化後完整命中字串的 SHA-256）；`masked` 僅顯示。
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockedHit {
+    pub file_path: Option<String>,
+    pub rule_label: String,
+    pub masked: String,
+    pub value_digest: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReviewItem {
@@ -64,6 +75,9 @@ pub struct ReviewItem {
     /// Agent 寫入 .amagi/pending/ 的來源檔路徑，同步後歸檔用
     #[serde(default)]
     pub source_pending_file: Option<String>,
+    /// Blocked 卡的結構化命中（adr-007 §4.1）；舊卡反序列化為空 → UI 禁用「誤判」鈕。
+    #[serde(default)]
+    pub blocked_hits: Vec<BlockedHit>,
     pub created_at: DateTime<Utc>,
     pub reviewed_at: Option<DateTime<Utc>>,
 }

@@ -6,6 +6,7 @@ pub mod project_manager;
 pub mod learn_engine;
 pub mod pending_scanner;
 pub mod review_queue;
+pub mod greylist;
 pub mod agent_exporter;
 pub mod workflow_manager;
 pub mod bridge_engine;

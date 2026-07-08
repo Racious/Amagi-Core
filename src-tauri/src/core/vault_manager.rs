@@ -102,7 +102,8 @@ pub fn set_vault_path(path: &str, data_dir: &Path) -> Result<VaultSetResult, App
     let block = build_pointer_block(path);
     let safety = safety_filter::check(&block);
     if !safety.is_safe {
-        let labels: Vec<String> = safety.hits.iter().map(|h| h.label.clone()).collect();
+        let mut labels: Vec<String> = safety.hits.iter().map(|h| h.label.clone()).collect();
+        labels.dedup(); // D0(a) find_iter 後同規則多值 → label 去重（同規則命中連續，dedup 足夠）
         return Err(AppError::SafetyBlocked(format!(
             "vault 路徑內容疑似含敏感資訊：{}",
             labels.join("、")
@@ -200,7 +201,8 @@ pub fn refresh_global_anchor(data_dir: &Path) -> Result<(), AppError> {
     // 不阻斷記憶已落 vault（Codex 稽核低）。
     let safety = safety_filter::check(&block);
     if !safety.is_safe {
-        let labels: Vec<String> = safety.hits.iter().map(|h| h.label.clone()).collect();
+        let mut labels: Vec<String> = safety.hits.iter().map(|h| h.label.clone()).collect();
+        labels.dedup(); // D0(a) find_iter 後同規則多值 → label 去重（同規則命中連續，dedup 足夠）
         return Err(AppError::SafetyBlocked(format!(
             "全域錨點刷新偵測到疑似敏感內容（{}），已略過刷新以免擴散到 ~/.claude／~/.codex；請檢查 general／shared 的 MEMORY.md。",
             labels.join("、")

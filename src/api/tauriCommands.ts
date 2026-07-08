@@ -45,6 +45,14 @@ export type ReviewStatus = 'pending' | 'accepted' | 'ignored' | 'synced'
 
 export type SyncScope = 'project' | 'shared' | 'global'
 
+/// 封鎖卡結構化命中（adr-007 §4.1）：權威資料；valueDigest 為身分、masked 僅顯示。
+export interface BlockedHit {
+  filePath: string | null
+  ruleLabel: string
+  masked: string
+  valueDigest: string
+}
+
 export interface ReviewItem {
   id: string
   projectId: string
@@ -57,8 +65,30 @@ export interface ReviewItem {
   syncTargets: string[]
   syncScope: SyncScope
   sourcePendingFile: string | null
+  /** 舊卡（升級前產生）為空陣列 → 「誤判」鈕禁用（adr-007 D5） */
+  blockedHits: BlockedHit[]
   createdAt: string
   reviewedAt: string | null
+}
+
+/// 灰名單身分鍵（adr-007 D2）：(filePath, ruleLabel, valueDigest)。
+export interface GreylistKey {
+  filePath: string | null
+  ruleLabel: string
+  valueDigest: string
+}
+
+export interface GreylistEntry extends GreylistKey {
+  masked: string
+  scope: string
+  sourceItemId: string
+  sourceCreatedAt: string
+  createdAt: string
+}
+
+export interface GreylistData {
+  version: number
+  entries: GreylistEntry[]
 }
 
 export interface ReviewApplyResult {
@@ -265,6 +295,11 @@ export const api = {
   acceptReviewItems: (ids: string[]) => invoke<ReviewApplyResult>('accept_review_items', { ids }),
   ignoreReviewItems: (ids: string[]) => invoke<void>('ignore_review_items', { ids }),
   discardBlockedItems: (ids: string[]) => invoke<number>('discard_blocked_items', { ids }),
+  discardBlockedAsFalsePositive: (projectId: string, itemId: string, selected: GreylistKey[]) =>
+    invoke<number>('discard_blocked_as_false_positive', { projectId, itemId, selected }),
+  listBlockedGreylist: (projectId: string) => invoke<GreylistData>('list_blocked_greylist', { projectId }),
+  removeGreylistEntries: (projectId: string, keys: GreylistKey[]) =>
+    invoke<number>('remove_greylist_entries', { projectId, keys }),
   updateReviewItem: (item: ReviewItem) => invoke<ReviewItem>('update_review_item', { item }),
 
   syncAgentFiles: (projectId: string, force = false) => invoke<SyncResult>('sync_agent_files', { projectId, force }),

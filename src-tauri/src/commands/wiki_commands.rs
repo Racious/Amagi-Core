@@ -26,7 +26,8 @@ pub async fn ingest_wiki_page(
 ) -> Result<ReviewItem, AppError> {
     let safety = safety_filter::check(&content);
     if !safety.is_safe {
-        let labels: Vec<String> = safety.hits.iter().map(|h| h.label.clone()).collect();
+        let mut labels: Vec<String> = safety.hits.iter().map(|h| h.label.clone()).collect();
+        labels.dedup(); // D0(a) find_iter 後同規則多值 → label 去重（同規則命中連續，dedup 足夠）
         return Err(AppError::SafetyBlocked(format!(
             "內容疑似含敏感資訊：{}",
             labels.join("、")
@@ -48,6 +49,7 @@ pub async fn ingest_wiki_page(
         sync_targets: vec![layer],
         sync_scope: SyncScope::Project,
         source_pending_file: None,
+        blocked_hits: vec![],
         created_at: Utc::now(),
         reviewed_at: None,
     };
@@ -69,7 +71,8 @@ pub async fn ingest_wiki_from_file(
 
     let safety = safety_filter::check(&content);
     if !safety.is_safe {
-        let labels: Vec<String> = safety.hits.iter().map(|h| h.label.clone()).collect();
+        let mut labels: Vec<String> = safety.hits.iter().map(|h| h.label.clone()).collect();
+        labels.dedup(); // D0(a) find_iter 後同規則多值 → label 去重（同規則命中連續，dedup 足夠）
         return Err(AppError::SafetyBlocked(format!(
             "內容疑似含敏感資訊：{}",
             labels.join("、")
@@ -113,6 +116,7 @@ pub async fn ingest_wiki_from_file(
         sync_targets: vec![layer],
         sync_scope: SyncScope::Project,
         source_pending_file: source_ref,
+        blocked_hits: vec![],
         created_at: Utc::now(),
         reviewed_at: None,
     };
