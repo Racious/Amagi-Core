@@ -91,7 +91,7 @@
         <span class="text-fg break-all">{{ vaultPath || '（未設定）' }}</span>
       </div>
       <div class="flex items-center gap-3 flex-wrap">
-        <button class="btn btn-primary btn-sm" :disabled="vaultBusy" @click="chooseVault">
+        <button class="btn btn-primary btn-sm" :disabled="vaultBusy || deployBusy" @click="chooseVault">
           {{ vaultBusy ? '套用中…' : '選擇 vault 資料夾並套用' }}
         </button>
         <button class="btn btn-ghost btn-sm" :disabled="gitBusy || !vaultPath" @click="gitPull">Pull</button>
@@ -179,10 +179,11 @@ async function loadVault() {
 async function chooseVault() {
   vaultMsg.value = ''
   vaultWarn.value = ''
-  const picked = await open({ directory: true, multiple: false, title: '選擇 vault 資料夾' })
-  if (typeof picked !== 'string') return
   vaultBusy.value = true
   try {
+    // open 也納入 try：dialog plugin reject 時才會顯示提示，不致無聲中斷（與 OnboardingVault 一致）
+    const picked = await open({ directory: true, multiple: false, title: '選擇 vault 資料夾' })
+    if (typeof picked !== 'string') return // 使用者取消
     const r = await api.setVaultPath(picked)
     vaultPath.value = r.vaultPath
     const verb = r.pointerAction === 'replaced' ? '更新' : '寫入'
@@ -226,9 +227,14 @@ const deployBusy = ref(false)
 /** 實際呼叫部署並更新訊息（不含確認對話）；供手動鈕與設路徑後自動提議共用。 */
 async function applyDoctrineDeploy() {
   const r = await api.deployGlobalDoctrine()
-  vaultMsg.value = `已部署全域 doctrine：\n・${r.claudePath}\n・${r.codexPath}`
+  // 累加不覆蓋：自動部署路徑上，vault 設定結果（受管區塊/備份）須與部署結果並陳
+  const msg = `已部署全域 doctrine：\n・${r.claudePath}\n・${r.codexPath}`
     + (r.backupMade ? '\n（首次原始版存於 <檔>.predeploy.bak、前一版存於 <檔>.bak，可還原）' : '')
-  if (r.warnings.length) vaultWarn.value = r.warnings.join('\n')
+  vaultMsg.value = vaultMsg.value ? `${vaultMsg.value}\n${msg}` : msg
+  if (r.warnings.length) {
+    const w = r.warnings.join('\n')
+    vaultWarn.value = vaultWarn.value ? `${vaultWarn.value}\n${w}` : w
+  }
 }
 
 async function deployDoctrine() {
