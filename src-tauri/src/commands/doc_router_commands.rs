@@ -86,7 +86,8 @@ pub async fn route_document(
 ) -> Result<RouteResultDto, AppError> {
     let safety = safety_filter::check(&content);
     if !safety.is_safe {
-        let labels: Vec<String> = safety.hits.iter().map(|h| h.label.clone()).collect();
+        let mut labels: Vec<String> = safety.hits.iter().map(|h| h.label.clone()).collect();
+        labels.dedup(); // D0(a) find_iter 後同規則多值 → label 去重（同規則命中連續，dedup 足夠）
         return Err(AppError::SafetyBlocked(format!(
             "內容疑似含敏感資訊：{}",
             labels.join("、")

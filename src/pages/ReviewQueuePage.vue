@@ -42,13 +42,70 @@
               </template>
             </div>
             <div v-if="revealMsg" class="text-xs mt-2" style="color: var(--c-danger);">{{ revealMsg }}</div>
-            <div class="flex justify-end mt-3 pt-3 border-t border-border">
+
+            <!-- hit 級靜音勾選面板（adr-007 D1）：預設全選、可取消個別值；
+                 全選→整卡出列，部分→卡就地更新殘餘。靜音的是「值」不是檔案。 -->
+            <div v-if="muteOpenId === item.id" class="mt-3 p-3 rounded border border-border" style="background: var(--c-bg-soft, rgba(0,0,0,0.03));">
+              <div class="text-xs font-bold mb-2 text-fg">勾選要靜音的誤判值（靜音的是這些值，不是檔案；同檔新出現的值仍會被擋）：</div>
+              <label v-for="(h, hi) in hitsOf(item)" :key="hi" class="flex items-start gap-2 text-xs mb-1 cursor-pointer">
+                <input type="checkbox" v-model="muteChecks[hi]" class="mt-0.5" />
+                <span class="text-muted">
+                  <template v-if="h.filePath">📄 {{ h.filePath }}｜</template>{{ h.ruleLabel }}｜{{ h.masked }}
+                </span>
+              </label>
+              <div v-if="muteMsg" class="text-xs mt-1" style="color: var(--c-danger);">{{ muteMsg }}</div>
+              <div class="flex justify-end gap-2 mt-2">
+                <button class="btn btn-sm" :disabled="muteBusy" @click="muteOpenId = null">取消</button>
+                <button class="btn btn-primary btn-sm" :disabled="reviewStore.loading || muteBusy || !muteChecks.some(Boolean)"
+                        @click="confirmMute(item)">{{ muteBusy ? '靜音中…' : '🔕 靜音勾選值' }}</button>
+              </div>
+            </div>
+
+            <div class="flex justify-end gap-2 mt-3 pt-3 border-t border-border">
+              <button v-if="hitsOf(item).length" @click="toggleMute(item)" :disabled="reviewStore.loading"
+                      class="btn btn-sm" title="誤判（如 commit SHA）勾選靜音，之後學習不再提醒；可於下方灰名單區解除">
+                🔕 誤判，不再提醒</button>
+              <button v-else disabled class="btn btn-sm opacity-50"
+                      title="舊版卡片無結構化命中，無法靜音；請用「確認丟棄」，重新學習產生的新卡即可靜音">
+                🔕 誤判，不再提醒</button>
               <button @click="discardBlocked(item)" :disabled="reviewStore.loading"
                       class="btn btn-danger btn-sm">🗑 確認丟棄</button>
             </div>
           </div>
         </div>
       </div>
+
+      <!-- 已靜音誤判（灰名單，adr-007 D5）：可檢視、可解除——無救回 UI 不上線的硬約束。
+           v1 已知限制：無批次解除/篩選/分頁（規模實證後另案）。 -->
+      <details class="mb-6 card p-4" @toggle="onGreylistToggle">
+        <summary class="cursor-pointer text-xs font-bold uppercase tracking-wider text-muted">
+          🔕 已靜音誤判（灰名單）
+        </summary>
+        <div class="mt-3">
+          <div class="flex items-center gap-2 mb-3">
+            <span class="text-xs text-muted">專案：</span>
+            <select v-model="glProjectId" class="input input-sm text-xs" @change="loadGreylist">
+              <option v-for="p in glProjects" :key="p.id" :value="p.id">{{ p.name }}</option>
+            </select>
+          </div>
+          <div v-if="glError" class="text-xs mb-2" style="color: var(--c-warn, #b45309);">
+            ⚠ 灰名單讀取失敗，靜音效果已暫停（該值會重新出卡）：{{ glError }}
+          </div>
+          <div v-else-if="glLoading" class="text-xs text-muted">載入中…</div>
+          <div v-else-if="glEntries.length === 0" class="text-xs text-muted">
+            尚無靜音項。封鎖卡按「誤判，不再提醒」勾選的值會列在這裡，可隨時解除恢復提醒。
+          </div>
+          <div v-else class="space-y-1">
+            <div v-for="(e, i) in glEntries" :key="i" class="flex items-center gap-2 text-xs py-1 border-b border-border">
+              <span class="flex-1 text-muted truncate" :title="`${e.filePath ?? '（無檔案）'}｜${e.ruleLabel}`">
+                <template v-if="e.filePath">📄 {{ e.filePath }}｜</template>{{ e.ruleLabel }}｜{{ e.masked }}
+              </span>
+              <span class="text-muted opacity-60">{{ e.createdAt.slice(0, 10) }}</span>
+              <button class="btn btn-sm" :disabled="glLoading" @click="unmute(e)">解除</button>
+            </div>
+          </div>
+        </div>
+      </details>
 
       <div v-if="pendingItems.length === 0 && blockedItems.length === 0"
            class="card card-dashed p-8 text-center">
@@ -106,12 +163,114 @@
 import { computed, ref } from 'vue'
 import { ask } from '@tauri-apps/plugin-dialog'
 import { useReviewStore } from '../stores/reviewStore'
-import { api, type ReviewItem } from '../api/tauriCommands'
+import { api, type BlockedHit, type GreylistEntry, type ProjectInfo, type ReviewItem } from '../api/tauriCommands'
 import ReviewItemCard from '../components/ReviewItemCard.vue'
 import StatusBadge from '../components/StatusBadge.vue'
 
 const reviewStore = useReviewStore()
 const revealMsg = ref('')
+
+// ── hit 級靜音（adr-007 D1）──────────────────────────────
+const muteOpenId = ref<string | null>(null)
+const muteChecks = ref<boolean[]>([])
+const muteMsg = ref('')
+const muteBusy = ref(false) // 送出中鎖：防同卡重複送出（impl-review 發現 2）
+
+/** 舊卡（升級前產生）blockedHits 為空/缺欄 → 靜音鈕禁用（不解析 content 文案） */
+function hitsOf(item: ReviewItem): BlockedHit[] {
+  return item.blockedHits ?? []
+}
+
+function toggleMute(item: ReviewItem) {
+  muteMsg.value = ''
+  if (muteOpenId.value === item.id) {
+    muteOpenId.value = null
+    return
+  }
+  muteOpenId.value = item.id
+  muteChecks.value = hitsOf(item).map(() => true) // 預設全選、可取消個別值
+}
+
+async function confirmMute(item: ReviewItem) {
+  muteMsg.value = ''
+  const hits = hitsOf(item)
+  const selected = hits.filter((_, i) => muteChecks.value[i])
+  if (selected.length === 0) return
+  const ok = await ask(
+    `將靜音 ${selected.length}/${hits.length} 個值：之後的學習不再對這些值出封鎖卡。\n` +
+      `靜音的是「值」不是檔案——同檔新出現的疑似機密仍會被擋。\n可隨時在「已靜音誤判」區解除。`,
+    { title: '誤判，不再提醒？', kind: 'warning' },
+  )
+  if (!ok) return
+  if (muteBusy.value) return
+  muteBusy.value = true
+  try {
+    await api.discardBlockedAsFalsePositive(
+      item.projectId,
+      item.id,
+      selected.map(h => ({ filePath: h.filePath, ruleLabel: h.ruleLabel, valueDigest: h.valueDigest })),
+    )
+    muteOpenId.value = null
+    // 後端已改卡（部分靜音）或出列（全選）：重載佇列反映實況
+    await reviewStore.fetchItems()
+    if (glProjectId.value === item.projectId) await loadGreylist()
+  } catch (e: any) {
+    muteMsg.value = `靜音失敗（卡未變動）：${e?.message ?? e}`
+  } finally {
+    muteBusy.value = false
+  }
+}
+
+// ── 灰名單檢視/解除（adr-007 D5）────────────────────────
+const glProjects = ref<ProjectInfo[]>([])
+const glProjectId = ref('')
+const glEntries = ref<GreylistEntry[]>([])
+const glError = ref('')
+const glLoading = ref(false)
+
+async function onGreylistToggle(e: Event) {
+  if (!(e.target as HTMLDetailsElement).open) return
+  if (glProjects.value.length === 0) {
+    try {
+      glProjects.value = await api.listProjects()
+      if (!glProjectId.value && glProjects.value.length > 0) glProjectId.value = glProjects.value[0].id
+    } catch (err: any) {
+      glError.value = err?.message ?? String(err)
+      return
+    }
+  }
+  await loadGreylist()
+}
+
+async function loadGreylist() {
+  if (!glProjectId.value) return
+  glLoading.value = true
+  glError.value = ''
+  try {
+    const data = await api.listBlockedGreylist(glProjectId.value)
+    glEntries.value = data.entries
+  } catch (e: any) {
+    // 讀取失敗＝靜音效果已暫停（產卡端 fail-open）：明確警示，不靜默顯示空清單
+    glEntries.value = []
+    glError.value = e?.message ?? String(e)
+  } finally {
+    glLoading.value = false
+  }
+}
+
+async function unmute(entry: GreylistEntry) {
+  glLoading.value = true
+  glError.value = ''
+  try {
+    await api.removeGreylistEntries(glProjectId.value, [
+      { filePath: entry.filePath, ruleLabel: entry.ruleLabel, valueDigest: entry.valueDigest },
+    ])
+    await loadGreylist()
+  } catch (e: any) {
+    glError.value = e?.message ?? String(e)
+    glLoading.value = false
+  }
+}
 
 /// 命中檔行判定：「📄 <path>」行回傳路徑，否則 null（格式由 learn_engine 產生、確定性）
 function fileLineOf(line: string): string | null {

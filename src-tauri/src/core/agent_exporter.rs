@@ -29,7 +29,8 @@ fn memory_filename(item: &ReviewItem) -> String {
 
 /// 專案 vault_folder 是否安全（相對、各段皆 Normal、首段為 `projects`）。
 /// 寫入/讀取路徑安全閘的第一關：擋 `..`/絕對路徑/非 projects 形式逃逸出 vault（Codex r3 高）。
-fn is_safe_project_vault_folder(vf: &str) -> bool {
+/// pub(crate)：greylist 落點解析（adr-007 D3）與記憶寫入閘共用同一守門，避免雙套規則漂移。
+pub(crate) fn is_safe_project_vault_folder(vf: &str) -> bool {
     let p = Path::new(vf);
     !vf.is_empty()
         && p.is_relative()
@@ -226,6 +227,7 @@ fn read_memory_dir(mem_dir: &Path) -> Vec<ReviewItem> {
             sync_targets: Vec::new(),
             sync_scope: SyncScope::Project,
             source_pending_file: None,
+            blocked_hits: vec![],
             created_at: created.unwrap(), // is_none 已於格式守門擋掉
             reviewed_at: None,
         };
@@ -800,6 +802,7 @@ mod tests {
             risk: RiskLevel::Low, status: ReviewStatus::Accepted,
             sync_targets: vec![], sync_scope: SyncScope::Project,
             source_pending_file: None, created_at: Utc::now(), reviewed_at: None,
+            blocked_hits: vec![],
         }
     }
 
@@ -910,6 +913,7 @@ mod tests {
             risk: RiskLevel::Low, status: ReviewStatus::Accepted,
             sync_targets: vec![], sync_scope: scope,
             source_pending_file: None, created_at: Utc::now(), reviewed_at: None,
+            blocked_hits: vec![],
         }
     }
 

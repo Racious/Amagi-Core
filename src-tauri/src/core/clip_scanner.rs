@@ -59,6 +59,7 @@ pub fn scan_clips(vault_root: &Path, already_imported: &[String]) -> Result<Vec<
             sync_targets: vec!["general".to_string()],
             sync_scope: SyncScope::Project,
             source_pending_file: Some(source_ref),
+            blocked_hits: vec![],
             created_at: Utc::now(),
             reviewed_at: None,
         });

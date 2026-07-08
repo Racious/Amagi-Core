@@ -217,6 +217,7 @@ mod tests {
             sync_targets: vec![],
             sync_scope: SyncScope::Project,
             source_pending_file: None,
+            blocked_hits: vec![],
             created_at: Utc::now(),
             reviewed_at: None,
         }
@@ -313,6 +314,7 @@ mod tests {
             risk: RiskLevel::Low, status: ReviewStatus::Accepted,
             sync_targets: vec![], sync_scope: SyncScope::Project,
             source_pending_file: None, created_at: Utc::now(), reviewed_at: None,
+            blocked_hits: vec![],
         };
         let f = build_memory_file(&m);
         assert!(f.starts_with("---\n"));

@@ -19,10 +19,13 @@ static SENSITIVE_PATTERNS: Lazy<Vec<(Regex, &'static str)>> = Lazy::new(|| {
     ]
 });
 
-/// 單一命中：規則名 + 遮罩後的片段（供使用者判斷真偽，不完整曝光機密）
+/// 單一命中：規則名 + 遮罩片段（顯示用）+ 值摘要（身分用）。
+/// `masked` 僅保留頭尾供辨識，**不得作為身分比對**（理論可碰撞）；
+/// 身分一律用 `value_digest`＝SHA-256(完整命中字串) 小寫 hex（adr-007 D2）。
 pub struct SafetyHit {
     pub label: String,
     pub masked: String,
+    pub value_digest: String,
 }
 
 pub struct SafetyResult {
@@ -30,14 +33,30 @@ pub struct SafetyResult {
     pub hits: Vec<SafetyHit>,
 }
 
+/// 完整命中字串的不可逆摘要（灰名單身分鍵素材）。
+pub fn value_digest(s: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(s.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+/// 掃描文字：每條規則收集**全部** match（adr-007 D0(a)——僅取第一個會讓
+/// 灰名單過濾誤判「全壓制」而漏報後續未灰名單新值）；同 (label, digest) 去重
+/// 避免同值多次出現灌爆 UI。`is_safe` 語意不變：任一命中即 false。
 pub fn check(text: &str) -> SafetyResult {
-    let mut hits = Vec::new();
-    for (pattern, label) in SENSITIVE_PATTERNS.iter() {
-        if let Some(m) = pattern.find(text) {
-            hits.push(SafetyHit {
-                label: (*label).to_string(),
-                masked: mask(m.as_str()),
-            });
+    let mut hits: Vec<SafetyHit> = Vec::new();
+    let mut seen: std::collections::HashSet<(usize, String)> = std::collections::HashSet::new();
+    for (idx, (pattern, label)) in SENSITIVE_PATTERNS.iter().enumerate() {
+        for m in pattern.find_iter(text) {
+            let digest = value_digest(m.as_str());
+            if seen.insert((idx, digest.clone())) {
+                hits.push(SafetyHit {
+                    label: (*label).to_string(),
+                    masked: mask(m.as_str()),
+                    value_digest: digest,
+                });
+            }
         }
     }
     SafetyResult {
@@ -96,6 +115,34 @@ mod tests {
         let long = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"; // 40 chars - flagged
         assert!(check(short).is_safe);
         assert!(!check(long).is_safe);
+    }
+
+    /// D0(a)：同規則多值須全數收集——「僅取第一個」會讓灰名單過濾漏報新值（adr-007 R1 發現①）。
+    #[test]
+    fn test_find_iter_collects_all_matches_per_rule() {
+        let a = "a".repeat(40);
+        let b = "b".repeat(40);
+        let r = check(&format!("{a}\n{b}"));
+        let hex_hits: Vec<_> = r.hits.iter().filter(|h| h.label.contains("十六進位")).collect();
+        assert_eq!(hex_hits.len(), 2, "兩個不同 hex 值應各成一筆命中");
+        assert_ne!(hex_hits[0].value_digest, hex_hits[1].value_digest);
+    }
+
+    /// D0(a)：同值多次出現於同段 → 去重一筆（避免 UI 過吵）。
+    #[test]
+    fn test_same_value_deduped_within_check() {
+        let a = "c".repeat(40);
+        let r = check(&format!("{a}\nsome text\n{a}"));
+        let hex_hits: Vec<_> = r.hits.iter().filter(|h| h.label.contains("十六進位")).collect();
+        assert_eq!(hex_hits.len(), 1, "同值同規則應去重為一筆");
+    }
+
+    /// D2：digest 為身分——同值跨次呼叫穩定、不同值必不同。
+    #[test]
+    fn test_value_digest_stable_and_distinct() {
+        assert_eq!(value_digest("abc"), value_digest("abc"));
+        assert_ne!(value_digest("abc"), value_digest("abd"));
+        assert_eq!(value_digest("abc").len(), 64);
     }
 
     #[test]

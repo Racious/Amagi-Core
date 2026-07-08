@@ -77,6 +77,7 @@ pub fn scan_pending_skills(
             ],
             sync_scope,
             source_pending_file: Some(path_str),
+            blocked_hits: vec![],
             created_at: Utc::now(),
             reviewed_at: None,
         };
