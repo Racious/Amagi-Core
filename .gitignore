@@ -53,3 +53,6 @@ AMAGI_Core_*_portable.exe
 # 註：專案根 AGENTS.md/CLAUDE.md 改為「進版控」（agent 入口檔，供 clone/協作者即用），見 .gitattributes 固定 LF。
 .amagi/
 *.bak
+
+# GitHub Pages 靜態成品（由 website/scripts/build-pages.mjs 與 Actions 自動產生）
+/website-pages/
