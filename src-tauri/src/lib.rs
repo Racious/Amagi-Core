@@ -29,6 +29,24 @@ pub enum AppError {
     Io(String),
     #[error("Git 錯誤：{0}")]
     Git(String),
+    /// git 整合（rebase／autostash 套回）遇到衝突。app 一律不代合內容（adr-008 A 案）：
+    /// rebase 衝突已自動 abort（abort_status=aborted）；abort 失敗＝abort_failed（repo 可能停在中斷態）；
+    /// autostash 套回衝突無 rebase 態可退（abort_status=none），標記留在工作區、原變更同存 stash。
+    #[error("{message}")]
+    GitConflict {
+        phase: String,        // "pull" | "pull-autostash" | "sync-rebase"
+        files: Vec<String>,
+        daily_hint: bool,     // 衝突檔含 daily/（每日共用日誌）時 true
+        abort_status: String, // "aborted" | "abort_failed" | "none"
+        message: String,
+    },
+    /// 本地 commit 已建立但未能推送（push 被拒且非遠端前進、或重試耗盡）。資料不丟，可重試。
+    #[error("{message}")]
+    GitSyncUnpushed {
+        phase: String, // "push" | "integrate"（commit 後 fetch/rebase 失敗）| "retry-exhausted"
+        files: Vec<String>,
+        message: String,
+    },
     #[error("找不到專案：{0}")]
     ProjectNotFound(String),
     #[error("無效路徑：{0}")]

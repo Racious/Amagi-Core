@@ -259,26 +259,36 @@ async function deployDoctrine() {
 const gitBusy = ref(false)
 const gitMsg = ref('')
 
+// AppError 結構化變體（GitConflict / GitSyncUnpushed）的 message 是物件（含人話 message 欄）；
+// 其餘變體 message 為字串。依 kind 加前綴讓錯誤性質一眼可辨（adr-008）。
+function gitErrText(e: any): string {
+  const m = e?.message
+  const text = (m && typeof m === 'object') ? (m.message ?? JSON.stringify(m)) : String(m ?? e)
+  if (e?.kind === 'GitConflict') return `衝突：${text}`
+  if (e?.kind === 'GitSyncUnpushed') return `未推送：${text}`
+  return `失敗：${text}`
+}
+
 async function gitStatus() {
   gitBusy.value = true
   try {
     const s = await api.vaultGitStatus()
     gitMsg.value = s.trim() ? s : '工作區乾淨，無變更。'
-  } catch (e: any) { gitMsg.value = `失敗：${e?.message ?? e}` }
+  } catch (e: any) { gitMsg.value = gitErrText(e) }
   finally { gitBusy.value = false }
 }
 
 async function gitPull() {
   gitBusy.value = true
   try { gitMsg.value = await api.vaultGitPull() || '已是最新。' }
-  catch (e: any) { gitMsg.value = `失敗：${e?.message ?? e}` }
+  catch (e: any) { gitMsg.value = gitErrText(e) }
   finally { gitBusy.value = false }
 }
 
 async function gitSync() {
   gitBusy.value = true
   try { gitMsg.value = await api.vaultGitSync() }
-  catch (e: any) { gitMsg.value = `失敗：${e?.message ?? e}` }
+  catch (e: any) { gitMsg.value = gitErrText(e) }
   finally { gitBusy.value = false }
 }
 

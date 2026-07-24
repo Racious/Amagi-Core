@@ -128,6 +128,15 @@ pub fn set_vault_path(path: &str, data_dir: &Path) -> Result<VaultSetResult, App
     };
     json_store::write_json(&config_path(data_dir), &cfg)?;
 
+    // adr-008：vault 掛 git 時冪等補設同步紀律 config（pull.rebase / rebase.autoStash，僅 --local）。
+    // best-effort：config 設不上不該擋 vault 設定（pull/sync 入口另有防禦性補設）。
+    // 判定用 rev-parse（vault_git::is_git_work_tree）而非 .git 目錄——linked worktree 也涵蓋。
+    if crate::core::vault_git::is_git_work_tree(p) {
+        if let Err(e) = crate::core::vault_git::ensure_repo_config(p) {
+            eprintln!("[AMAGI] vault git config 補設失敗（不影響 vault 設定）：{e}");
+        }
+    }
+
     // 偵測全域 doctrine 源檔是否就位（供前端決定是否提議自動部署，步驟5 A 案）。
     let has_doctrine_source = detect_doctrine_source(p);
 
