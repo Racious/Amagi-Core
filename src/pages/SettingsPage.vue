@@ -112,6 +112,21 @@
       <pre v-if="gitMsg" class="text-xs mt-2 whitespace-pre-wrap text-muted">{{ gitMsg }}</pre>
     </div>
 
+    <!-- Output Style 分發 -->
+    <div class="card p-5 mb-4">
+      <div class="font-semibold text-sm mb-1 text-fg">Output Style 分發</div>
+      <p class="text-xs text-muted mb-3">
+        把 vault <code>_output-styles/*.md</code>（天城應對模式正本）<strong>覆蓋分發</strong>到本機
+        <code>~/.claude/output-styles/</code>；若 <code>~/.claude/settings.json</code> 尚未設定
+        <code>outputStyle</code>，自動補預設「天城」（已有值則一位元組不動）。開全新視窗生效。
+      </p>
+      <button class="btn btn-primary btn-sm" :disabled="styleBusy || !vaultPath" @click="distributeStyles">
+        {{ styleBusy ? '分發中…' : '分發 output styles' }}
+      </button>
+      <p v-if="styleMsg" class="text-xs mt-2 whitespace-pre-line break-all" style="color: var(--c-accent);">{{ styleMsg }}</p>
+      <p v-if="styleWarn" class="text-xs mt-2 whitespace-pre-line" style="color: var(--c-warn, #b45309);">{{ styleWarn }}</p>
+    </div>
+
     <!-- 技能分發（已移至「技能管理」頁）-->
     <div class="card p-5 mb-4">
       <div class="font-semibold text-sm mb-1 text-fg">技能分發</div>
@@ -252,6 +267,55 @@ async function deployDoctrine() {
     vaultWarn.value = `部署失敗（未寫入）：${e?.message ?? e}`
   } finally {
     deployBusy.value = false
+  }
+}
+
+// ── Output Style 分發（A-3）────────────────────────
+const styleBusy = ref(false)
+const styleMsg = ref('')
+const styleWarn = ref('')
+
+/** settings 動作 → 人話回報（情境窮舉，缺 case 會被 TS never 檢查抓到） */
+function settingsActionText(a: import('../api/tauriCommands').OutputStyleSettingsAction): string {
+  switch (a) {
+    case 'created_with_default': return 'settings.json 不存在，已建立並設預設「天城」'
+    case 'added_default': return 'settings.json 已補預設 outputStyle「天城」（其他欄位未動）'
+    case 'already_set': return 'settings.json 已有 outputStyle，原值未動'
+    case 'parse_failed_skipped': return '⚠ settings.json 解析失敗，未寫入（請手動檢查該檔）'
+    case 'skipped_no_styles': return 'settings.json 未動'
+  }
+}
+
+async function distributeStyles() {
+  styleMsg.value = ''
+  styleWarn.value = ''
+  const ok = await ask(
+    '將把 vault _output-styles/ 的 style「覆蓋」到 ~/.claude/output-styles/ 同名副本，\n'
+      + '並在 settings.json 缺 outputStyle 時補預設「天城」（已有值不動）。確定分發？',
+    { title: '分發 output styles', kind: 'warning' }
+  )
+  if (!ok) return
+  styleBusy.value = true
+  try {
+    const r = await api.distributeOutputStyles()
+    if (r.distributed.length === 0) {
+      styleWarn.value = 'vault _output-styles/ 沒有可分發的 style（README 與 dot-prefixed 不算），未寫入任何檔案。'
+      return
+    }
+    styleMsg.value = `已分發 ${r.distributed.length} 款：${r.distributed.join('、')}\n`
+      + settingsActionText(r.settingsAction)
+      + '\n（切換預設款後需開全新視窗才生效）'
+    if (r.missingName.length) {
+      styleWarn.value = `以下檔案缺 frontmatter name:（切換時無法以名稱選用，建議補上）：${r.missingName.join('、')}`
+    }
+    if (r.settingsAction === 'parse_failed_skipped') {
+      styleWarn.value = (styleWarn.value ? styleWarn.value + '\n' : '')
+        + 'settings.json 解析失敗未寫入——style 檔已照常分發，settings 請手動處理。'
+    }
+  } catch (e: any) {
+    styleWarn.value = `分發失敗：${e?.message ?? e}`
+  } finally {
+    styleBusy.value = false
   }
 }
 

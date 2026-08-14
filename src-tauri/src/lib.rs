@@ -198,6 +198,7 @@ pub fn run() {
             cancel_bridge_run,
             set_vault_path,
             deploy_global_doctrine,
+            distribute_output_styles,
             get_vault_config,
             get_vault_status,
             init_project_vault,

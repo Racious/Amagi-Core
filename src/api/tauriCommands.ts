@@ -236,6 +236,22 @@ export interface DeployResult {
   warnings: string[]
 }
 
+/** settings.json 的 outputStyle 處理結果（A-2 情境窮舉） */
+export type OutputStyleSettingsAction =
+  | 'created_with_default'   // 檔案不存在 → 建最小 JSON 帶預設
+  | 'added_default'          // 缺欄位 → 補預設「天城」
+  | 'already_set'            // 已有值 → 檔案一位元組不動
+  | 'parse_failed_skipped'   // JSON 壞檔 → 不寫、警告
+  | 'skipped_no_styles'      // 無 style 可分發 → settings 不動
+
+export interface OutputStyleDistributeResult {
+  /** 已分發款式顯示名（frontmatter name:，缺則檔名） */
+  distributed: string[]
+  /** 缺 name: frontmatter 的檔名（切換依賴 name，須提醒補上） */
+  missingName: string[]
+  settingsAction: OutputStyleSettingsAction
+}
+
 export interface PromoteResult {
   /** true＝本次實際搬檔；false＝先前已搬移，本次僅收斂衍生物（續跑）。 */
   moved: boolean
@@ -350,6 +366,7 @@ export const api = {
   getVaultStatus: () => invoke<VaultStatus>('get_vault_status'),
   setVaultPath: (path: string) => invoke<VaultSetResult>('set_vault_path', { path }),
   deployGlobalDoctrine: () => invoke<DeployResult>('deploy_global_doctrine'),
+  distributeOutputStyles: () => invoke<OutputStyleDistributeResult>('distribute_output_styles'),
   vaultGitStatus: () => invoke<string>('vault_git_status'),
   vaultGitPull: () => invoke<string>('vault_git_pull'),
   vaultGitSync: (message?: string) => invoke<string>('vault_git_sync', { message: message ?? null }),

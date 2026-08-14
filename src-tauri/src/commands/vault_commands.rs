@@ -1,7 +1,7 @@
 use std::path::Path;
 use tauri::State;
 use crate::{AppError, AppState};
-use crate::core::{project_manager, vault_git, vault_manager::{self, VaultConfig, VaultSetResult, VaultStatus, DeployResult}};
+use crate::core::{output_style_library, project_manager, vault_git, vault_manager::{self, VaultConfig, VaultSetResult, VaultStatus, DeployResult}};
 use crate::models::project::InitResult;
 
 #[tauri::command]
@@ -17,6 +17,21 @@ pub async fn set_vault_path(
 #[tauri::command]
 pub async fn deploy_global_doctrine(state: State<'_, AppState>) -> Result<DeployResult, AppError> {
     vault_manager::deploy_global_doctrine(&state.data_dir)
+}
+
+/// Output style 分發：vault `_output-styles/*.md` → `~/.claude/output-styles/`（覆蓋、冪等），
+/// 並 ensure `~/.claude/settings.json` 的 `outputStyle` 預設（缺補「天城」、有值不動、壞檔跳過）。
+#[tauri::command]
+pub async fn distribute_output_styles(
+    state: State<'_, AppState>,
+) -> Result<output_style_library::OutputStyleDistributeResult, AppError> {
+    let vault_path = vault_manager::get_vault_config(&state.data_dir).vault_path
+        .ok_or_else(|| AppError::InvalidPath("尚未設定 vault 路徑，無法分發 output styles".into()))?;
+    let styles_dest = crate::utils::fs_utils::global_claude_output_styles_dir()
+        .ok_or_else(|| AppError::Io("無法取得 ~/.claude/output-styles 路徑".into()))?;
+    let settings = crate::utils::fs_utils::global_claude_settings_json_path()
+        .ok_or_else(|| AppError::Io("無法取得 ~/.claude/settings.json 路徑".into()))?;
+    output_style_library::distribute_output_styles(Path::new(&vault_path), &styles_dest, &settings)
 }
 
 #[tauri::command]

@@ -26,6 +26,16 @@ pub fn global_claude_md_path() -> Option<std::path::PathBuf> {
     dirs::home_dir().map(|h| h.join(".claude").join("CLAUDE.md"))
 }
 
+/// ~/.claude/output-styles/（output style 分發副本目錄）
+pub fn global_claude_output_styles_dir() -> Option<std::path::PathBuf> {
+    dirs::home_dir().map(|h| h.join(".claude").join("output-styles"))
+}
+
+/// ~/.claude/settings.json（Claude Code 全域設定；outputStyle 欄位所在）
+pub fn global_claude_settings_json_path() -> Option<std::path::PathBuf> {
+    dirs::home_dir().map(|h| h.join(".claude").join("settings.json"))
+}
+
 /// ~/.codex/AGENTS.md（Codex 全域指令）
 pub fn global_codex_agents_md_path() -> Option<std::path::PathBuf> {
     dirs::home_dir().map(|h| h.join(".codex").join("AGENTS.md"))
