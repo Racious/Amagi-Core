@@ -4,15 +4,15 @@ AMAGI Core 的所有重要變更記錄於此。版本遵循語意化版號（maj
 
 ## v0.9.0
 
-封鎖項丟棄灰名單 ＋ vault git 同步 app 強制層（ADR-008）＋ output style 分發。全數經 Codex 交叉審查與實機驗證。
+封鎖項丟棄灰名單 ＋ vault git 同步強化 ＋ output style 分發。全數經交叉審查與實機驗證。
 
 ### 功能
-- **output style 分發**：設定頁新增「分發 output styles」——把 vault `_output-styles/*.md`（天城應對模式正本）覆蓋分發到 `~/.claude/output-styles/`（README 與 dot-prefixed 排除、冪等、per-file temp+rename 原子寫入），並 ensure `~/.claude/settings.json` 的 `outputStyle` 預設（缺檔建最小 JSON 帶「天城」／缺欄位補預設且保留其他欄位與鍵序／已有值位元組級不動／JSON 壞檔 fail-safe 不寫只警告；讀剝 BOM、寫回 UTF-8 無 BOM）。回報分發款式名、settings 動作、缺 `name:` 警告；無 style 可分發明確告知不靜默。
-- **封鎖項丟棄灰名單**（adr-007）：誤判 hit 級勾選靜音（混合卡不連坐）、灰名單 vault 權威源隨 git 跨機、審核頁可檢視可解除。
-- **vault git 同步 app 強制層**（adr-008）：Pull／提交並推送整合 `pull --rebase`——衝突三段分類安全退回、push race 重試、不代合 daily、不 force push；AppError 結構化變體（GitConflict／GitSyncUnpushed）讓錯誤性質一眼可辨。
+- **output style 分發**：設定頁新增「分發 output styles」——把 vault `_output-styles/*.md`（自訂 Claude Code output style 正本）覆蓋分發到 `~/.claude/output-styles/`（README 與 dot-prefixed 排除、冪等、per-file temp+rename 原子寫入），並確保 `~/.claude/settings.json` 的 `outputStyle` 有預設值（缺檔建最小 JSON 帶預設款／缺欄位補預設款且保留其他欄位與鍵序／已有值位元組級不動／JSON 壞檔 fail-safe 不寫只警告；讀剝 BOM、寫回 UTF-8 無 BOM）。回報分發款式、settings 動作、缺 `name:` 警告；無 style 可分發明確告知不靜默。
+- **封鎖項丟棄灰名單**：安全過濾誤判的 hit 級勾選靜音（混合卡不連坐）、灰名單以 vault 為權威源隨 git 跨機、審核頁可檢視可解除。
+- **vault git 同步強化**：Pull／提交並推送整合 `pull --rebase`——衝突分類安全退回、push race 重試、不自動合併衝突、不 force push；結構化錯誤（GitConflict／GitSyncUnpushed）讓錯誤性質一眼可辨。
 
 ### 品質
-- 灰名單：設計三輪（含 Junie/Gemini 三方複審）＋實作兩輪閉環＋實機九步；adr-008：設計審＋實作兩輪＋實機 smoke 四步；output style：Codex 審無高中風險、三低風險全採納修正＋UI 引導式實機＋切換三步實測。cargo test 216 綠、vue-tsc 0。
+- 三項功能均經多輪交叉審查與實機驗證；cargo test 216 綠、vue-tsc 0。
 
 ## v0.8.2
 
