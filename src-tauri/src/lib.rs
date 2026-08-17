@@ -187,6 +187,8 @@ pub fn run() {
             sync_agent_files,
             preview_sync_diff,
             promote_memory,
+            preview_memory_deletion,
+            delete_memory,
             list_vault_memories,
             scan_project_workflows,
             list_all_workflows,

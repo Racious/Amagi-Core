@@ -22,6 +22,74 @@ fn scan_item_conflicts(items: &[ReviewItem]) -> Vec<ItemConflict> {
     out
 }
 
+/// 為歸檔目標產生不碰撞的檔名：`<name>.md` 未占用即直接用；已占用則附時間戳
+/// `<stem>-<stamp>.md`，仍碰撞再加序號。迴圈式唯一化風格沿用
+/// `agent_exporter::skill_dest_paths`；`stamp` 由呼叫方傳入以便測試不依賴時鐘。
+pub(crate) fn unique_archive_dest(history_dir: &std::path::Path, fname: &str, stamp: &str) -> std::path::PathBuf {
+    let first = history_dir.join(fname);
+    if !first.exists() {
+        return first;
+    }
+    let p = std::path::Path::new(fname);
+    let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("pending");
+    let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("md");
+    let mut n = 1;
+    loop {
+        n += 1;
+        let cand = if n == 2 {
+            history_dir.join(format!("{stem}-{stamp}.{ext}"))
+        } else {
+            history_dir.join(format!("{stem}-{stamp}-{n}.{ext}"))
+        };
+        if !cand.exists() {
+            return cand;
+        }
+    }
+}
+
+/// 歸檔已同步的 pending 來源檔（技能／記憶共用），回傳需呈現給老爺的警告。
+///
+/// N1（2026-08-17，見 vault `2026-08-17-memory-ui-completion-review-r2.md`）：原實作為
+/// `let _ = std::fs::rename(..)`——Windows 上目標已存在時 `fs::rename` **回 Err 而非覆蓋**，
+/// 錯誤被吞掉後歸檔靜默失敗、pending 檔留在原地；該項同步後已從佇列出列
+/// （`review_queue::remove_items_of_type` 不留 `Synced` 帳本），`learn_commands` 依
+/// `source_pending_file` 的去重隨之失效 → **下輪學習重複入列同一筆**。
+/// 故此處：先確保 history 目錄存在、撞名產唯一檔名、失敗一律回報（不再靜默）。
+pub(crate) fn archive_pending_sources(
+    history_dir: &std::path::Path,
+    items: &[&ReviewItem],
+    stamp: &str,
+) -> Vec<String> {
+    let mut warnings = Vec::new();
+    // 僅處理來源檔仍在場者：已被手動移除＝無事可歸檔，非失敗。
+    let srcs: Vec<&String> = items.iter()
+        .filter_map(|i| i.source_pending_file.as_ref())
+        .filter(|src| std::path::Path::new(src.as_str()).exists())
+        .collect();
+    if srcs.is_empty() {
+        return warnings;
+    }
+    if let Err(e) = std::fs::create_dir_all(history_dir) {
+        warnings.push(format!(
+            "⚠ 無法建立歸檔目錄 .amagi/history（{e}）：{} 個 pending 來源檔未歸檔。內容已寫入 vault，但來源檔仍留在 .amagi/pending/，下次學習會重複列出同一批候選——請手動移走這些檔，或修正目錄權限後再同步一次。",
+            srcs.len()));
+        return warnings;
+    }
+    for src in srcs {
+        let src_path = std::path::Path::new(src.as_str());
+        let fname = match src_path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n,
+            None => continue,
+        };
+        let dest = unique_archive_dest(history_dir, fname, stamp);
+        if let Err(e) = std::fs::rename(src_path, &dest) {
+            warnings.push(format!(
+                "⚠ pending 來源檔歸檔失敗：{fname}（{e}）。內容已寫入 vault，但該檔仍留在 .amagi/pending/，下次學習會重複列出同一候選——請手動刪除或移到 .amagi/history/。"));
+        }
+    }
+    warnings
+}
+
 #[tauri::command]
 pub async fn sync_agent_files(
     project_id: String,
@@ -137,19 +205,14 @@ pub async fn sync_agent_files(
         review_queue::remove_items_of_type(&data_dir, &skill_done, ReviewItemType::Skill)?;
     }
 
-    // ── 歸檔已同步的 pending 技能檔 ──────────────────
+    // ── 歸檔已同步的 pending 來源檔（技能／記憶共用）──────────────────
     let history_dir = std::path::Path::new(&project.path).join(".amagi").join("history");
-    for item in &accepted {
-        if let Some(ref src) = item.source_pending_file {
-            let src_path = std::path::Path::new(src);
-            if src_path.exists() {
-                if let Some(fname) = src_path.file_name() {
-                    let dest = history_dir.join(fname);
-                    let _ = std::fs::rename(src_path, &dest);
-                }
-            }
-        }
-    }
+    let archive_targets: Vec<&ReviewItem> = accepted.iter()
+        .filter(|i| i.source_pending_file.is_some())
+        .collect();
+    let stamp = chrono::Utc::now().format("%Y%m%d-%H%M%S").to_string();
+    result.skipped_files.extend(
+        archive_pending_sources(&history_dir, &archive_targets, &stamp));
 
     Ok(result)
 }
@@ -273,6 +336,182 @@ pub async fn promote_memory(
     Ok(PromoteResultDto { moved: outcome.moved, warnings })
 }
 
+/// 刪除記憶的預覽（P3 二段確認用）：待刪檔案身分 ＋ git 可復原性判斷。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryDeletionPreview {
+    pub file_name: String,
+    pub title: String,
+    /// 該檔在 vault 內的相對路徑（給老爺確認落點）
+    pub relative_path: String,
+    /// 是否為全域層（general）——前端據此加強警示（Q3：blast radius 最大）
+    pub is_global: bool,
+    /// git 復原性人話說明（非 git repo／有未提交變更／已提交各不同）
+    pub git_note: String,
+    /// 保守判斷：僅在「vault 是 git repo 且該檔無未提交變更」時為 true
+    pub recoverable_by_git: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteMemoryResultDto {
+    pub deleted_file: String,
+    /// 衍生物刷新的警告；非空代表 vault 已刪但索引/內聯未完全更新（UI 不可顯示為單純成功）
+    pub warnings: Vec<String>,
+}
+
+/// scope 字串 → SyncScope。只接受三個合法值，不接受任意輸入。
+fn parse_scope(scope: &str) -> Result<SyncScope, AppError> {
+    match scope {
+        "project" => Ok(SyncScope::Project),
+        "shared" => Ok(SyncScope::Shared),
+        "global" => Ok(SyncScope::Global),
+        other => Err(AppError::InvalidPath(format!("未知的記憶範圍「{other}」，拒絕執行"))),
+    }
+}
+
+/// 判斷待刪檔的 git 復原性。**保守**：任何無法確認的狀況都不宣稱可復原。
+///
+/// 以 `vault_git::file_commit_state` 直接對該路徑發問，**不解析 `git status` 字串**——
+/// core.quotepath 會把中文檔名轉義成八進位，字串比對會永遠不命中而誤判為「已提交」
+/// （2026-08-17 實機驗證抓到的 bug；記憶檔名幾乎必然含中文，屬常態命中）。
+fn git_recovery_note(vault_root: &std::path::Path, rel_path: &str) -> (bool, String) {
+    use crate::core::vault_git::{self, FileCommitState};
+    if !vault_git::is_git_work_tree(vault_root) {
+        return (false, "⚠ vault 不在 git 版控下：刪除後無法從 git 復原。".into());
+    }
+    match vault_git::file_commit_state(vault_root, rel_path) {
+        Ok(FileCommitState::Untracked) => (false,
+            "⚠ 此檔尚未提交進 git（未追蹤）：刪除後無法從 git 復原，且不會留下任何備份。".into()),
+        Ok(FileCommitState::Modified) => (false,
+            "⚠ 此檔有未提交的變更：git 最多只能復原到上一次提交的版本。".into()),
+        Ok(FileCommitState::Committed) => (true,
+            "此檔已提交進 git，必要時可從 git 歷史復原（但仍請確認後再刪）。".into()),
+        Err(e) => (false, format!(
+            "⚠ 無法確認 vault git 狀態（{e}）：無法判斷能否從 git 復原，請謹慎。")),
+    }
+}
+
+/// 以 scope＋id 定位待刪記憶並回傳預覽（不刪任何檔）。
+/// 走與 delete 完全相同的安全閘，故「同 id 多筆」等 fail-closed 情況在此就會報錯。
+#[tauri::command]
+pub async fn preview_memory_deletion(
+    scope: String,
+    project_id: Option<String>,
+    memory_id: String,
+    state: State<'_, AppState>,
+) -> Result<MemoryDeletionPreview, AppError> {
+    let data_dir = state.data_dir.clone();
+    let sc = parse_scope(&scope)?;
+    let vault_root = vault_manager::get_vault_config(&data_dir).vault_path
+        .ok_or_else(|| AppError::InvalidPath("尚未設定 vault 路徑，無法刪除記憶".into()))?;
+    let vroot = std::path::Path::new(&vault_root);
+    let vault_folder = resolve_vault_folder(&sc, project_id.as_deref(), &data_dir)?;
+
+    let (mem_dir, fname, item) =
+        agent_exporter::locate_memory_for_delete(vroot, &sc, vault_folder.as_deref(), &memory_id)?;
+    let rel = mem_dir.strip_prefix(vroot).unwrap_or(&mem_dir)
+        .join(&fname).to_string_lossy().to_string();
+    let (recoverable, note) = git_recovery_note(vroot, &rel);
+    Ok(MemoryDeletionPreview {
+        file_name: fname,
+        title: item.title,
+        relative_path: rel.replace('\\', "/"),
+        is_global: matches!(sc, SyncScope::Global),
+        git_note: note,
+        recoverable_by_git: recoverable,
+    })
+}
+
+/// Project scope 需由 project_id 推出 vault_folder；shared/global 不需要。
+fn resolve_vault_folder(
+    scope: &SyncScope,
+    project_id: Option<&str>,
+    data_dir: &std::path::Path,
+) -> Result<Option<String>, AppError> {
+    if !matches!(scope, SyncScope::Project) {
+        return Ok(None);
+    }
+    let pid = project_id.ok_or_else(|| {
+        AppError::InvalidPath("刪除專案層記憶需指定專案，拒絕執行".into())
+    })?;
+    let project = project_manager::get_project(pid, data_dir)
+        .ok_or_else(|| AppError::ProjectNotFound(pid.to_string()))?;
+    Ok(Some(project.vault_folder.clone()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| agent_exporter::project_vault_folder(&project.path))))
+}
+
+/// 刪除一筆 vault 記憶（P3）。**vault 檔即真相**：刪源檔＝該記憶消失，不做 `.trash/` 軟刪除
+/// （會成為第二真相並重開「幽靈復活」風險）。前端須先呼叫 `preview_memory_deletion`
+/// 呈現二段確認（含 git 復原性與全域影響）後才呼叫本 command。
+///
+/// 衍生物語意（沿用 promote 的分工）：
+/// - vault 源檔＋該層 `MEMORY.md`：由 `agent_exporter::delete_memory_file` 處理，失敗即 Err。
+/// - 專案 AGENTS/CLAUDE 內聯：刪除已完成後才重寫，失敗以 **warning** 回報（不 Err——
+///   記憶已刪無法回滾，Err 會讓前端誤判「沒刪成功」而重試；warning 可引導重刷）。
+/// - 全域錨點（shared/general）：同上 best-effort warning。
+#[tauri::command]
+pub async fn delete_memory(
+    scope: String,
+    project_id: Option<String>,
+    memory_id: String,
+    state: State<'_, AppState>,
+) -> Result<DeleteMemoryResultDto, AppError> {
+    let data_dir = state.data_dir.clone();
+    let sc = parse_scope(&scope)?;
+    let vault_root = vault_manager::get_vault_config(&data_dir).vault_path
+        .ok_or_else(|| AppError::InvalidPath("尚未設定 vault 路徑，無法刪除記憶".into()))?;
+    let vroot = std::path::Path::new(&vault_root);
+    let vault_folder = resolve_vault_folder(&sc, project_id.as_deref(), &data_dir)?;
+
+    // 專案層：內聯會以 project.path 為根重寫 → 沿用 promote 的前置 fail-closed，
+    // 避免「記憶已刪、指針拒寫」的半完成狀態（2026-07-03 事故同型）。
+    let project = match (&sc, project_id.as_deref()) {
+        (SyncScope::Project, Some(pid)) => {
+            let p = project_manager::get_project(pid, &data_dir)
+                .ok_or_else(|| AppError::ProjectNotFound(pid.to_string()))?;
+            agent_exporter::ensure_project_outside_vault(vroot, &p.path)?;
+            Some(p)
+        }
+        _ => None,
+    };
+
+    let outcome = agent_exporter::delete_memory_file(
+        vroot, &sc, vault_folder.as_deref(), &memory_id)?;
+
+    // ── 衍生物刷新（刪除已完成，一律 best-effort + warning）──────────────
+    let mut warnings: Vec<String> = Vec::new();
+    if let (Some(p), Some(vf)) = (project.as_ref(), vault_folder.as_deref()) {
+        let remaining = agent_exporter::load_project_memory_from_vault(vroot, vf);
+        let refs: Vec<&ReviewItem> = remaining.iter().collect();
+        let entries = agent_exporter::memory_index_entries(&refs);
+        let bullets = crate::utils::markdown::memory_bullets(&entries);
+        for (fname, body) in [
+            ("AGENTS.md", crate::utils::markdown::build_agents_md(vf, &bullets)),
+            ("CLAUDE.md", crate::utils::markdown::build_claude_md(Some(vf), &bullets)),
+        ] {
+            let path = std::path::Path::new(&p.path).join(fname);
+            if path.exists() {
+                if let Err(e) = crate::utils::markdown::write_with_backup(&path, &body) {
+                    warnings.push(format!(
+                        "記憶已刪除，但專案 {fname} 內聯重寫失敗（{e}）：該檔仍列著已刪的記憶，請再同步一次以補刷。"));
+                }
+            }
+        }
+    } else if let Err(e) = vault_manager::refresh_global_anchor(&data_dir) {
+        // shared/general 的衍生物＝全域錨點
+        warnings.push(format!(
+            "記憶已刪除，但全域錨點刷新失敗（{e}）：~/.claude/CLAUDE.md／~/.codex/AGENTS.md 仍列著已刪的記憶；請到「設定」重設一次 vault 路徑或再同步一次。"));
+    }
+    // 跨機提醒（C2 共識：本輪不做全量 maintenance command，但須告知）
+    if !matches!(sc, SyncScope::Project) {
+        warnings.push(
+            "提醒：其他機器需 git pull 後再執行一次「同步全域 doctrine」，其本機 AI 讀取索引才會更新。".into());
+    }
+    Ok(DeleteMemoryResultDto { deleted_file: outcome.deleted_file, warnings })
+}
+
 /// 記憶庫頁資料源（Phase 3 vault-first）：直接掃 vault 三層記憶（唯一權威），
 /// 取代「佇列篩 Synced」（Phase 1 出列後佇列常態無 Synced，舊資料源恆空）。
 /// vault 未設 → 空集合（與 list_library_skills 同慣例）。status 一律回 Synced（僅供前端顯示相容）。
@@ -339,5 +578,93 @@ mod tests {
     fn test_gate_passes_clean_items() {
         let items = vec![item("乾淨", "在 gameStore 新增 undo()，撤回上一步")];
         assert!(scan_item_conflicts(&items).is_empty());
+    }
+
+    // ── N1 pending 歸檔（見 archive_pending_sources 註解）──────────────
+
+    fn tmp_root(tag: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!("amagi-{tag}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    /// 帶 pending 來源檔的項目：實際建檔，回傳 (item, 來源路徑)
+    fn item_with_pending(pending_dir: &std::path::Path, fname: &str) -> ReviewItem {
+        let src = pending_dir.join(fname);
+        std::fs::write(&src, "內容").unwrap();
+        let mut it = item(fname, "x");
+        it.source_pending_file = Some(src.to_string_lossy().to_string());
+        it
+    }
+
+    #[test]
+    fn test_archive_creates_history_dir_and_moves_source() {
+        let root = tmp_root("archive-basic");
+        let pending = root.join(".amagi").join("pending");
+        std::fs::create_dir_all(&pending).unwrap();
+        // history 目錄刻意不預建 → 須由 archive 自行建立（原實作缺此步，rename 會失敗）
+        let history = root.join(".amagi").join("history");
+        let it = item_with_pending(&pending, "memory-a.md");
+
+        let warns = archive_pending_sources(&history, &[&it], "20260817-101500");
+
+        assert!(warns.is_empty(), "正常歸檔不應有警告，實得 {warns:?}");
+        assert!(history.join("memory-a.md").is_file(), "來源檔應已移入 history");
+        assert!(!pending.join("memory-a.md").exists(), "pending 不應殘留已歸檔來源檔");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_archive_same_name_keeps_both_copies() {
+        // N1 核心迴歸：history 已有同名檔時，舊實作在 Windows 回 Err 並被吞掉
+        // → pending 殘留 → 下輪重複入列。修正後須兩份都留、pending 清空。
+        let root = tmp_root("archive-collide");
+        let pending = root.join(".amagi").join("pending");
+        let history = root.join(".amagi").join("history");
+        std::fs::create_dir_all(&pending).unwrap();
+        std::fs::create_dir_all(&history).unwrap();
+        std::fs::write(history.join("memory-dup.md"), "先前歸檔的內容").unwrap();
+        let it = item_with_pending(&pending, "memory-dup.md");
+
+        let warns = archive_pending_sources(&history, &[&it], "20260817-101500");
+
+        assert!(warns.is_empty(), "撞名應自動唯一化而非報錯，實得 {warns:?}");
+        assert!(!pending.join("memory-dup.md").exists(), "pending 不應殘留（否則下輪重複入列）");
+        assert_eq!(
+            std::fs::read_to_string(history.join("memory-dup.md")).unwrap(),
+            "先前歸檔的內容",
+            "既有歷史檔不得被覆蓋");
+        assert!(history.join("memory-dup-20260817-101500.md").is_file(),
+            "新檔應以時間戳唯一化落檔");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_archive_missing_source_is_not_a_failure() {
+        // 來源檔已被手動移除 → 無事可歸檔，不應產生警告
+        let root = tmp_root("archive-missing");
+        let history = root.join(".amagi").join("history");
+        let mut it = item("memory-gone.md", "x");
+        it.source_pending_file = Some(root.join("nope").join("memory-gone.md")
+            .to_string_lossy().to_string());
+
+        let warns = archive_pending_sources(&history, &[&it], "20260817-101500");
+
+        assert!(warns.is_empty(), "來源不在場不算失敗，實得 {warns:?}");
+        assert!(!history.exists(), "無事可做時不應建立 history 目錄");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_unique_archive_dest_second_collision_adds_index() {
+        // 同秒內第三份同名檔：base → base-stamp → base-stamp-3
+        let root = tmp_root("archive-thrice");
+        std::fs::write(root.join("m.md"), "1").unwrap();
+        std::fs::write(root.join("m-20260817-101500.md"), "2").unwrap();
+
+        let dest = unique_archive_dest(&root, "m.md", "20260817-101500");
+
+        assert!(dest.ends_with("m-20260817-101500-3.md"), "實得 {dest:?}");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -56,17 +56,29 @@
         <span v-for="t in item.syncTargets" :key="t"
               class="pill tone-accent">{{ t }}</span>
 
+        <!-- 範圍切換：技能與記憶皆適用。
+             原先 `v-if` 只綁 skill，記憶卡完全看不到也改不了 scope——AI 投遞
+             `scope: global` 的記憶，老爺核可時不知道那筆會進全域（每次對話都載入）。
+             且原為二態循環（project ⇄ global），會把 AI 標的 shared 顯示成「此專案」、
+             一點就靜默改成 global；故改為三態循環，兩型別一併正確。 -->
         <button
-          v-if="item.itemType === 'skill'"
-          @click="toggleScope"
+          v-if="item.itemType === 'skill' || item.itemType === 'memory'"
+          @click="cycleScope"
           class="pill font-medium transition-colors"
-          :class="currentScope === 'global' ? 'tone-warning' : 'tone-muted'"
-          :title="currentScope === 'global'
-            ? '目前：全域（所有專案共用）→ 點擊切換為此專案'
-            : '目前：此專案 → 點擊切換為全域（~/.codex/skills）'"
+          :class="scopeMeta.tone"
+          :title="scopeMeta.hint"
         >
-          {{ currentScope === 'global' ? '🌐 全域' : '📁 此專案' }}
+          {{ scopeMeta.icon }} {{ scopeMeta.label }}
         </button>
+      </div>
+
+      <!-- 全域範圍警示：核可前務必讓老爺看到 blast radius（Q3 共識：general 需更高門檻）。
+           全域記憶會進 ~/.claude/CLAUDE.md、~/.codex/AGENTS.md 錨點，所有專案的所有 AI
+           每次對話都會讀到；錯記憶不只是檔案錯，是已污染後續判斷。 -->
+      <div v-if="currentScope === 'global' && item.itemType === 'memory'"
+           class="alert tone-warning mt-2 text-xs">
+        🌐 此筆將寫入<strong>全域記憶</strong>：所有專案、所有 AI 每次對話都會讀到。
+        若只適用單一專案，請點上方範圍改為「此專案」。
       </div>
     </div>
 
@@ -118,6 +130,36 @@ const editTitle = ref(props.item.title)
 const editContent = ref(props.item.content)
 const currentScope = ref<SyncScope>(props.item.syncScope ?? 'project')
 
+/** 三態範圍循環：此專案 → 跨專案共用 → 全域 → 此專案 */
+const SCOPE_CYCLE: SyncScope[] = ['project', 'shared', 'global']
+
+/** 範圍 pill 的圖示／文案／色調：落點語意依型別不同（記憶講 vault 落點、技能講分發預設） */
+const scopeMeta = computed(() => {
+  const isMemory = props.item.itemType === 'memory'
+  const next = SCOPE_CYCLE[(SCOPE_CYCLE.indexOf(currentScope.value) + 1) % SCOPE_CYCLE.length]
+  const nextLabel = { project: '此專案', shared: '跨專案共用', global: '全域' }[next]
+  const where = isMemory
+    ? {
+        project: 'vault projects/<專案>/agent/memory',
+        shared: 'vault shared/agent/memory（跨專案共用）',
+        global: 'vault general/agent/memory（所有專案、所有 AI 每次對話都讀到）',
+      }
+    : {
+        project: '僅本專案',
+        shared: '跨專案共用',
+        global: '全域（~/.codex/skills、~/.claude/commands）',
+      }
+  const meta = {
+    project: { icon: '📁', label: '此專案', tone: 'tone-muted' },
+    shared: { icon: '🤝', label: '跨專案共用', tone: 'tone-accent' },
+    global: { icon: '🌐', label: '全域', tone: 'tone-warning' },
+  }[currentScope.value]
+  return {
+    ...meta,
+    hint: `目前：${meta.label} → ${where[currentScope.value]}\n點擊切換為「${nextLabel}」`,
+  }
+})
+
 // 技能的編輯器高度：依內容行數動態調整，最少 10 行，最多 24 行
 const editorRows = computed(() => {
   const lines = editContent.value.split('\n').length
@@ -154,8 +196,9 @@ function saveAndAccept() {
   editing.value = false
 }
 
-function toggleScope() {
-  currentScope.value = currentScope.value === 'global' ? 'project' : 'global'
+function cycleScope() {
+  const i = SCOPE_CYCLE.indexOf(currentScope.value)
+  currentScope.value = SCOPE_CYCLE[(i + 1) % SCOPE_CYCLE.length]
   emit('save', { ...props.item, syncScope: currentScope.value })
 }
 </script>

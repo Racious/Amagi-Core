@@ -51,9 +51,22 @@ pub async fn learn_from_project(
         &project_id,
         &existing_sources,
     )?;
+    // ── 2b. 從 .amagi/pending/ 撈取 Agent 寫入的記憶草稿（P1）──
+    // 記憶的自然產生者是 AI（任務收尾才知道哪個坑值得記），原本此通道只收技能、
+    // 記憶無入口 → vault 記憶區長期為空。兩通道共用同一解析骨架與安全守門。
+    let pending_mem = pending_scanner::scan_pending_memories(
+        &project.path,
+        &project_id,
+        &existing_sources,
+    )?;
 
-    let pending_count = pending.len();
-    candidates.extend(pending);
+    let pending_count = pending.items.len();
+    let pending_memory_count = pending_mem.items.len();
+    // N3：被安全過濾擋下的投遞檔不入列，但必須讓老爺看得到（原僅印 stderr）。
+    let mut pending_skipped = pending.skipped;
+    pending_skipped.extend(pending_mem.skipped);
+    candidates.extend(pending.items);
+    candidates.extend(pending_mem.items);
 
     // ── 統計 ──────────────────────────────────────────
     let blocked = candidates.iter().filter(|c| {
@@ -70,6 +83,8 @@ pub async fn learn_from_project(
         candidates_generated: generated,
         blocked_count: blocked,
         pending_skill_count: pending_count,
+        pending_memory_count,
+        pending_skipped,
         candidate_ids: ids,
     })
 }

@@ -67,8 +67,27 @@
           <pre class="text-xs text-muted whitespace-pre-wrap rounded p-2"
                style="background: var(--c-surface-2);">{{ detail.content }}</pre>
         </div>
+        <!-- 刪除二段確認（P3）：vault 檔即真相，刪源檔＝該記憶消失，無軟刪除可回收。
+             確認前務必攤開：落點路徑、git 復原性、全域層的影響範圍。 -->
+        <div v-if="deletePreview" class="modal-body pt-0">
+          <div class="alert tone-danger text-xs">
+            <div class="font-bold mb-1">確認刪除這筆記憶？</div>
+            <div>檔案：<code>{{ deletePreview.relativePath }}</code></div>
+            <div class="mt-1">{{ deletePreview.gitNote }}</div>
+            <div v-if="!deletePreview.recoverableByGit" class="mt-1 font-bold">
+              ⚠ 此操作可能無法由 git 完整復原。
+            </div>
+            <div v-if="deletePreview.isGlobal" class="mt-1 font-bold">
+              🌐 這是<strong>全域記憶</strong>：刪除後所有專案、所有 AI 都不再讀到它。
+            </div>
+          </div>
+        </div>
+        <div v-if="deleteError" class="modal-body pt-0">
+          <div class="alert tone-danger text-xs">{{ deleteError }}</div>
+        </div>
+
         <div class="modal-foot">
-          <template v-if="detail.syncScope === 'project'">
+          <template v-if="detail.syncScope === 'project' && !deletePreview && !deleteError">
             <template v-if="!confirmingPromote">
               <button class="btn btn-primary btn-sm" :disabled="busy" @click="confirmingPromote = true">
                 升級為共用
@@ -84,7 +103,23 @@
               <button class="btn btn-ghost btn-sm" :disabled="busy" @click="confirmingPromote = false">取消</button>
             </template>
           </template>
-          <button v-if="!confirmingPromote" class="btn btn-ghost btn-sm" @click="close">關閉</button>
+
+          <!-- 刪除：第一段（要求預覽）→ 第二段（確認執行）-->
+          <template v-if="!confirmingPromote">
+            <button v-if="!deletePreview && !deleteError"
+                    class="btn btn-danger btn-sm" :disabled="busy" @click="askDelete">
+              {{ busy ? '檢查中…' : '🗑 刪除' }}
+            </button>
+            <template v-else-if="deletePreview">
+              <button class="btn btn-danger btn-sm" :disabled="busy" @click="doDelete">
+                {{ busy ? '刪除中…' : '確認刪除' }}
+              </button>
+              <button class="btn btn-ghost btn-sm" :disabled="busy" @click="cancelDelete">取消</button>
+            </template>
+            <button v-else class="btn btn-ghost btn-sm" :disabled="busy" @click="cancelDelete">返回</button>
+          </template>
+
+          <button v-if="!confirmingPromote && !deletePreview" class="btn btn-ghost btn-sm" @click="close">關閉</button>
         </div>
       </div>
     </div>
@@ -95,7 +130,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch, onMounted } from 'vue'
-import { api, type ReviewItem, type SyncScope } from '../api/tauriCommands'
+import { api, type MemoryDeletionPreview, type ReviewItem, type SyncScope } from '../api/tauriCommands'
 import { useProjectStore } from '../stores/projectStore'
 
 const projectStore = useProjectStore()
@@ -128,6 +163,10 @@ const detail = ref<ReviewItem | null>(null)
 const confirmingPromote = ref(false)
 const busy = ref(false)
 const msg = ref('')
+/** 非 null＝刪除已進入第二段確認（內容為後端預覽：落點、git 復原性、是否全域） */
+const deletePreview = ref<MemoryDeletionPreview | null>(null)
+/** 預覽或刪除失敗訊息（例如同 id 多筆需人工消歧）—— 顯示在跳窗內，不吞掉 */
+const deleteError = ref<string | null>(null)
 
 function projectName(id: string): string {
   return projectStore.projects.find(p => p.id === id)?.name ?? id
@@ -213,10 +252,64 @@ function scopePath(m: ReviewItem): string {
 function open(m: ReviewItem) {
   detail.value = m
   confirmingPromote.value = false
+  resetDelete()
 }
 function close() {
   detail.value = null
   confirmingPromote.value = false
+  resetDelete()
+}
+
+function resetDelete() {
+  deletePreview.value = null
+  deleteError.value = null
+}
+function cancelDelete() {
+  resetDelete()
+}
+
+/** 刪除第一段：向後端要預覽。走與刪除相同的安全閘，
+ *  故「同 id 多筆」「身分無法確認」等 fail-closed 會在此就顯示，不會等到確認後才失敗。 */
+async function askDelete() {
+  if (!detail.value) return
+  busy.value = true
+  resetDelete()
+  msg.value = ''
+  try {
+    deletePreview.value = await api.previewMemoryDeletion(
+      detail.value.syncScope,
+      detail.value.syncScope === 'project' ? detail.value.projectId : null,
+      detail.value.id,
+    )
+  } catch (e: any) {
+    deleteError.value = `無法刪除：${e?.message ?? e}`
+  } finally {
+    busy.value = false
+  }
+}
+
+/** 刪除第二段：實際執行。warnings 非空＝vault 已刪但衍生物未完全刷新，須照實呈現。 */
+async function doDelete() {
+  if (!detail.value) return
+  const title = detail.value.title
+  busy.value = true
+  msg.value = ''
+  try {
+    const r = await api.deleteMemory(
+      detail.value.syncScope,
+      detail.value.syncScope === 'project' ? detail.value.projectId : null,
+      detail.value.id,
+    )
+    msg.value = `已刪除「${title}」（${r.deletedFile}）。`
+    if (r.warnings.length > 0) msg.value += ` ⚠ ${r.warnings.join(' ')}`
+    close()
+    await loadMemories()
+  } catch (e: any) {
+    deleteError.value = `刪除失敗：${e?.message ?? e}`
+    deletePreview.value = null
+  } finally {
+    busy.value = false
+  }
 }
 
 async function doPromote() {

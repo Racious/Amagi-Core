@@ -258,6 +258,140 @@ fn e2e_learn_review_sync_memory() {
 }
 
 // ───────────────────────────────────────────────────────────
+// 1a2. P1+P3 端到端：AI 投遞記憶 → 掃入 → 核可 → 落 vault → 可刪除
+//      （「冰箱會滿」的自動化證據；UI 層另走實機驗證）
+// ───────────────────────────────────────────────────────────
+#[test]
+fn e2e_agent_memory_pending_to_vault_and_delete() {
+    use crate::core::pending_scanner;
+    use crate::models::review::SyncScope;
+
+    let sb = Sandbox::new("pmem");
+    let project = project_manager::add_project(&sb.repo_str(), &sb.data_dir).unwrap();
+    project_manager::init_project(&project, Some(&sb.vault_dir())).unwrap();
+    let vault = sb.vault_dir();
+    let vf = project.vault_folder.clone()
+        .unwrap_or_else(|| agent_exporter::project_vault_folder(&sb.repo_str()));
+
+    // ── ① AI 投遞：三層 scope 各一筆 ＋ 一筆含假金鑰（應被安全過濾擋下）──
+    let pending = sb.repo.join(".amagi").join("pending");
+    std::fs::write(pending.join("memory-proj.md"),
+        "---\ntitle: 專案踩坑\ncategory: gotcha\n---\n這個專案的 build 要先跑 codegen\n").unwrap();
+    std::fs::write(pending.join("memory-share.md"),
+        "---\ntitle: 跨專案踩坑\nscope: shared\n---\nPS5.1 寫 JSON 帶 BOM 會讓 app 靜默清空資料\n").unwrap();
+    std::fs::write(pending.join("memory-leak.md"),
+        "---\ntitle: 帶金鑰的記憶\n---\nkey: sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n").unwrap();
+    // 技能通道同時存在 → 驗證兩通道互不干擾、既有行為不退化
+    std::fs::write(pending.join("skill-build.md"),
+        "---\ntitle: 建置流程\n---\n## 步驟\n1. codegen\n2. build\n").unwrap();
+
+    let mem_scan = pending_scanner::scan_pending_memories(&sb.repo_str(), &project.id, &[]).unwrap();
+    let skill_scan = pending_scanner::scan_pending_skills(&sb.repo_str(), &project.id, &[]).unwrap();
+
+    // 驗收③：安全擋下必須可見（不靜默）
+    assert_eq!(mem_scan.items.len(), 2, "只有兩筆乾淨記憶該入列");
+    assert_eq!(mem_scan.skipped.len(), 1, "含金鑰那筆必須回報為 skipped");
+    assert_eq!(mem_scan.skipped[0].file_name, "memory-leak.md");
+    assert_eq!(mem_scan.skipped[0].kind, "記憶");
+    assert!(!mem_scan.skipped[0].labels.is_empty(), "須帶命中規則名稱");
+    assert!(!format!("{:?}", mem_scan.skipped[0]).contains("sk-ant-api03"),
+        "回報不得含敏感原文");
+    // 驗收⑥：既有技能通道不退化
+    assert_eq!(skill_scan.items.len(), 1, "技能通道應獨立撈到 skill-build.md");
+    assert_eq!(skill_scan.items[0].item_type, ReviewItemType::Skill);
+
+    // scope 標籤生效（驗收②的前半）
+    let scope_of = |t: &str| mem_scan.items.iter().find(|i| i.title == t).unwrap().sync_scope.clone();
+    assert_eq!(scope_of("專案踩坑"), SyncScope::Project);
+    assert_eq!(scope_of("跨專案踩坑"), SyncScope::Shared);
+
+    // ── ② 進佇列 → 核可 ──
+    review_queue::add_items(&sb.data_dir, mem_scan.items.clone()).unwrap();
+    let queued = review_queue::list_items(&sb.data_dir, Some(&project.id));
+    let ids: Vec<String> = queued.iter().map(|i| i.id.clone()).collect();
+    let accepted = review_queue::accept_items(&sb.data_dir, &ids).unwrap();
+    assert!(gate(&accepted).is_empty(), "乾淨投遞不該被衝突閘卡住");
+
+    // ── ③ 同步落 vault（專案層走 sync_agent_files；shared 走 sync_shared_memory）──
+    let proj_mem: Vec<ReviewItem> = accepted.iter()
+        .filter(|i| i.sync_scope == SyncScope::Project).cloned().collect();
+    agent_exporter::sync_agent_files(
+        &sb.repo_str(), project.vault_folder.as_deref(), Some(&vault), &accepted, &proj_mem,
+    ).unwrap();
+    agent_exporter::sync_shared_memory(&vault, &accepted).unwrap();
+
+    // 驗收①②：三層落點 ＋ 索引重建 ＋ 專案內聯更新
+    let proj_items = agent_exporter::load_project_memory_from_vault(&vault, &vf);
+    assert!(proj_items.iter().any(|i| i.title == "專案踩坑"), "專案層記憶應落 vault");
+    let shared_items = agent_exporter::load_shared_memory_from_vault(&vault);
+    assert!(shared_items.iter().any(|i| i.title == "跨專案踩坑"), "shared 記憶應落 vault");
+    assert!(vault.join(&vf).join("agent/memory/MEMORY.md").is_file(), "專案層索引須存在");
+    assert!(vault.join("shared/agent/memory/MEMORY.md").is_file(), "shared 索引須存在");
+    assert!(sb.read("CLAUDE.md").contains("專案踩坑") || sb.read("AGENTS.md").contains("專案踩坑"),
+        "專案 AGENTS/CLAUDE 內聯應含新記憶");
+
+    // ── ④ 歸檔 pending（N1）：來源檔不得殘留，否則下輪重複入列 ──
+    // **走 production 函式本身**（`archive_pending_sources`，非手寫 rename）——
+    // 它是自由函式、不需 State，故 e2e 可直接呼叫 command 實際使用的同一條路徑。
+    // 並刻意先在 history 種一個同名檔，一併驗撞名唯一化（W1 的核心情境）。
+    let history = sb.repo.join(".amagi").join("history");
+    std::fs::create_dir_all(&history).unwrap();
+    std::fs::write(history.join("memory-proj.md"), "先前歸檔的同名檔").unwrap();
+
+    let archive_refs: Vec<&ReviewItem> = accepted.iter()
+        .filter(|i| i.source_pending_file.is_some())
+        .collect();
+    let warns = crate::commands::sync_commands::archive_pending_sources(
+        &history, &archive_refs, "20260817-120000");
+
+    assert!(warns.is_empty(), "正常歸檔不應有警告，實得 {warns:?}");
+    assert!(!pending.join("memory-proj.md").exists(), "已同步的來源檔不應留在 pending");
+    assert!(!pending.join("memory-share.md").exists(), "已同步的來源檔不應留在 pending");
+    // 撞名唯一化：既有歷史檔內容不得被覆蓋，新檔以時間戳落另一個名字
+    assert_eq!(
+        std::fs::read_to_string(history.join("memory-proj.md")).unwrap(),
+        "先前歸檔的同名檔",
+        "既有 history 檔不得被覆蓋");
+    assert!(history.join("memory-proj-20260817-120000.md").is_file(),
+        "撞名時新檔應以時間戳唯一化落檔");
+    assert!(history.join("memory-share.md").is_file(), "未撞名者以原名歸檔");
+    // 被擋下的那筆**留在原處**（每次學習會再提醒，直到修好）
+    assert!(pending.join("memory-leak.md").is_file(), "被安全擋下的檔應留在 pending");
+
+    // 驗收①末：再次掃描不重複入列（已歸檔者消失、被擋者仍只回報 skipped）
+    let rescan = pending_scanner::scan_pending_memories(&sb.repo_str(), &project.id, &[]).unwrap();
+    assert!(rescan.items.is_empty(), "已歸檔的投遞不應重複入列，實得 {:?}",
+        rescan.items.iter().map(|i| &i.title).collect::<Vec<_>>());
+    assert_eq!(rescan.skipped.len(), 1, "被擋下的檔應持續回報");
+
+    // ── ⑤ 驗收④：可刪除（三層皆可，刪後索引更新、不復活）──
+    let proj_id_to_del = proj_items.iter().find(|i| i.title == "專案踩坑").unwrap().id.clone();
+    agent_exporter::delete_memory_file(
+        &vault, &SyncScope::Project, Some(&vf), &proj_id_to_del).unwrap();
+    let after_proj = agent_exporter::load_project_memory_from_vault(&vault, &vf);
+    assert!(!after_proj.iter().any(|i| i.title == "專案踩坑"), "刪除後不得再出現");
+    let idx = std::fs::read_to_string(vault.join(&vf).join("agent/memory/MEMORY.md")).unwrap();
+    assert!(!idx.contains("專案踩坑"), "索引須反映刪除，實得：{idx}");
+
+    let shared_id_to_del = shared_items.iter().find(|i| i.title == "跨專案踩坑").unwrap().id.clone();
+    agent_exporter::delete_memory_file(&vault, &SyncScope::Shared, None, &shared_id_to_del).unwrap();
+    assert!(!agent_exporter::load_shared_memory_from_vault(&vault)
+        .iter().any(|i| i.title == "跨專案踩坑"), "shared 刪除後不得再出現");
+
+    // 刪除後再同步一次：**不得復活**（vault 為唯一權威，佇列已出列無帳本可重建）
+    review_queue::remove_items_of_type(&sb.data_dir, &ids, ReviewItemType::Memory).unwrap();
+    let remaining_queue = review_queue::list_items(&sb.data_dir, Some(&project.id));
+    let proj_mem2: Vec<ReviewItem> = remaining_queue.iter()
+        .filter(|i| i.item_type == ReviewItemType::Memory && i.sync_scope == SyncScope::Project)
+        .cloned().collect();
+    agent_exporter::sync_agent_files(
+        &sb.repo_str(), project.vault_folder.as_deref(), Some(&vault), &[], &proj_mem2,
+    ).unwrap();
+    assert!(!agent_exporter::load_project_memory_from_vault(&vault, &vf)
+        .iter().any(|i| i.title == "專案踩坑"), "已刪記憶不得因再同步而復活");
+}
+
+// ───────────────────────────────────────────────────────────
 // 1b. 自訂 vault_folder 應貫穿 init（發現1 修復回歸測試）
 // ───────────────────────────────────────────────────────────
 #[test]

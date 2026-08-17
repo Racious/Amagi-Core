@@ -788,6 +788,180 @@ pub fn promote_memory_to_shared(
     Ok(PromoteOutcome { moved })
 }
 
+/// 刪除一筆 vault 記憶的結果（P3）。
+#[derive(Debug)]
+pub struct DeleteMemoryOutcome {
+    /// 已刪除的檔名（僅檔名，不含路徑）
+    pub deleted_file: String,
+}
+
+/// 依 scope 解析該層記憶目錄。Project 需 `vault_folder`；Shared→`shared`、Global→`general`。
+/// 一律走安全 helper（驗 vault_folder 合法 + canonical containment，擋 symlink/junction 逃逸）。
+fn memory_dir_for_scope(
+    vault_root: &Path,
+    scope: &SyncScope,
+    vault_folder: Option<&str>,
+) -> Result<PathBuf, AppError> {
+    match scope {
+        SyncScope::Project => {
+            let vf = vault_folder.filter(|s| !s.trim().is_empty()).ok_or_else(|| {
+                AppError::InvalidPath("刪除專案層記憶需指定所屬專案，拒絕執行".into())
+            })?;
+            safe_project_memory_dir(vault_root, vf).ok_or_else(|| {
+                AppError::InvalidPath(format!("不安全的 vault_folder，拒絕刪除：{vf}"))
+            })
+        }
+        SyncScope::Shared => safe_tier_memory_dir(vault_root, "shared")
+            .ok_or_else(|| AppError::InvalidPath("不安全的 shared 記憶目錄，拒絕刪除".into())),
+        SyncScope::Global => safe_tier_memory_dir(vault_root, "general")
+            .ok_or_else(|| AppError::InvalidPath("不安全的 general 記憶目錄，拒絕刪除".into())),
+    }
+}
+
+/// 在記憶目錄中「嚴格」定位待刪目標，回傳 (檔名, 該檔解析出的 item)。
+///
+/// **刻意不用 `read_memory_dir` 的結果反查**（Codex R1 Q6 #3）：loader 對不可讀／非法／
+/// 非一般檔一律靜默忽略，「load 後找不到」不能當成「該檔不存在」的安全結論——否則
+/// 一個讀不到的同 id 檔會讓刪除誤判目標。此處對目錄逐檔正向確認身分，且：
+/// - 只認一般檔（`symlink_metadata`），canonical 父目錄須等於該記憶目錄（TOCTOU）
+/// - frontmatter `title`/`category`/`created` 須齊備，且 `memory_filename` 算回原檔名
+/// - frontmatter `id` 必須**完全等於**目標 id（不接受 idfrag 前綴比對）
+/// - 命中 0 筆 → NotFound 類 Err；>1 筆 → fail-closed Err 要求人工消歧，絕不猜
+///
+/// 讀取失敗的候選檔不會被當成「不存在」而放過：若其檔名 idfrag 與目標 id 相符，
+/// 一律 fail-closed（寧可拒絕刪除，也不誤刪另一筆）。
+fn strict_locate_memory(
+    mem_dir: &Path,
+    memory_id: &str,
+) -> Result<(String, ReviewItem), AppError> {
+    let canon_mem = std::fs::canonicalize(mem_dir).map_err(|e| {
+        AppError::InvalidPath(format!("記憶目錄無法解析（{e}），拒絕刪除"))
+    })?;
+    let rd = std::fs::read_dir(mem_dir)
+        .map_err(|e| AppError::Io(format!("讀取記憶目錄失敗（{e}），拒絕刪除")))?;
+    let target_frag = id_frag(memory_id);
+    let mut hits: Vec<(String, ReviewItem)> = Vec::new();
+    let mut unreadable_suspects: Vec<String> = Vec::new();
+
+    for ent in rd.flatten() {
+        let fname = ent.file_name().to_string_lossy().to_string();
+        if fname == "MEMORY.md" || !looks_like_memory_file(&fname) {
+            continue;
+        }
+        // 檔名 idfrag 與目標不符 → 與本次刪除無關，直接跳過（不必讀檔）。
+        let stem = fname.strip_suffix(".md").unwrap_or(&fname);
+        let fname_frag = match stem.rfind('-') {
+            Some(i) => stem[i + 1..].to_string(),
+            None => continue,
+        };
+        if fname_frag != target_frag {
+            continue;
+        }
+        // 以下為「可能是目標」的候選：任何確認不了的狀況都 fail-closed，不放過。
+        let is_regular = std::fs::symlink_metadata(ent.path())
+            .map(|m| m.file_type().is_file()).unwrap_or(false);
+        if !is_regular {
+            return Err(AppError::InvalidPath(format!(
+                "{fname} 不是一般檔（可能為 symlink／目錄），拒絕刪除")));
+        }
+        let parent_ok = std::fs::canonicalize(ent.path()).ok()
+            .as_deref().and_then(Path::parent)
+            .map(|p| p == canon_mem.as_path()).unwrap_or(false);
+        if !parent_ok {
+            return Err(AppError::InvalidPath(format!(
+                "{fname} 的實際位置不在該記憶目錄內（疑似連結逃逸），拒絕刪除")));
+        }
+        let raw = match std::fs::read_to_string(ent.path()) {
+            Ok(s) => s,
+            Err(_) => { unreadable_suspects.push(fname); continue; }
+        };
+        let (fm_id, title, category, content, created) = parse_memory_file(&raw);
+        if title.is_empty() || category.is_empty() || created.is_none() {
+            unreadable_suspects.push(fname);
+            continue;
+        }
+        let item = ReviewItem {
+            id: fm_id.clone().unwrap_or_else(|| fname_frag.clone()),
+            project_id: String::new(),
+            item_type: ReviewItemType::Memory,
+            category,
+            title,
+            content,
+            risk: RiskLevel::Low,
+            status: ReviewStatus::Synced,
+            sync_targets: Vec::new(),
+            sync_scope: SyncScope::Project,
+            source_pending_file: None,
+            blocked_hits: vec![],
+            created_at: created.unwrap(),
+            reviewed_at: None,
+        };
+        // 受管檔名一致性：算回的檔名須等於實際檔名（擋手放/竄改檔洗白）。
+        if memory_filename(&item) != fname {
+            unreadable_suspects.push(fname);
+            continue;
+        }
+        // 身分必須完全相等（legacy 無 frontmatter id 者以檔名 idfrag 為身分，同 read_memory_dir）。
+        if item.id == memory_id {
+            hits.push((fname, item));
+        }
+    }
+
+    if !unreadable_suspects.is_empty() {
+        return Err(AppError::InvalidPath(format!(
+            "偵測到 {} 個檔名相符但身分無法確認的檔（{}）：為避免誤刪，已中止刪除；請人工檢查後再試。",
+            unreadable_suspects.len(), unreadable_suspects.join("、"))));
+    }
+    match hits.len() {
+        0 => Err(AppError::InvalidPath(format!("找不到記憶 id「{memory_id}」，未刪除任何檔"))),
+        1 => Ok(hits.remove(0)),
+        n => Err(AppError::InvalidPath(format!(
+            "記憶 id「{memory_id}」命中 {n} 筆，為避免誤刪已中止；請先人工消歧再刪除"))),
+    }
+}
+
+/// 刪除前定位：走與 `delete_memory_file` **完全相同**的安全閘與身分確認，但不動任何檔。
+/// 回傳 (該層記憶目錄, 檔名, 解析出的記憶)。
+/// 用於二段確認的預覽——讓「同 id 多筆」「身分無法確認」等 fail-closed 情況
+/// 在老爺按下刪除**之前**就顯示出來，而不是確認後才失敗。
+pub fn locate_memory_for_delete(
+    vault_root: &Path,
+    scope: &SyncScope,
+    vault_folder: Option<&str>,
+    memory_id: &str,
+) -> Result<(PathBuf, String, ReviewItem), AppError> {
+    let mem_dir = memory_dir_for_scope(vault_root, scope, vault_folder)?;
+    let (fname, item) = strict_locate_memory(&mem_dir, memory_id)?;
+    Ok((mem_dir, fname, item))
+}
+
+/// 刪除一筆 vault 記憶源檔，並以剩餘權威集重建該層 `MEMORY.md`（P3）。
+///
+/// vault-first 語意：**vault 檔即真相**，刪源檔＝該記憶消失（不做 `.trash/` 軟刪除——
+/// 那會成為第二真相，並重新打開此專案 2026-07 才結構性消滅的「幽靈復活」風險）。
+/// 內聯（專案 AGENTS/CLAUDE）與全域錨點的刷新由 command 層負責，分工同 `promote_memory_to_shared`。
+pub fn delete_memory_file(
+    vault_root: &Path,
+    scope: &SyncScope,
+    vault_folder: Option<&str>,
+    memory_id: &str,
+) -> Result<DeleteMemoryOutcome, AppError> {
+    let mem_dir = memory_dir_for_scope(vault_root, scope, vault_folder)?;
+    let (fname, _item) = strict_locate_memory(&mem_dir, memory_id)?;
+
+    std::fs::remove_file(mem_dir.join(&fname))
+        .map_err(|e| AppError::Io(format!("刪除 {fname} 失敗（{e}）：未變更任何索引")))?;
+
+    // 刪後重讀權威集確認該 id 已消失（若仍在＝有第二份同 id 檔，屬異常狀態，明確報錯）。
+    let remaining = read_memory_dir(&mem_dir);
+    if remaining.iter().any(|i| i.id == memory_id) {
+        return Err(AppError::Io(format!(
+            "已刪除 {fname}，但仍偵測到同 id「{memory_id}」的記憶檔——索引未重建，請人工檢查該記憶目錄")));
+    }
+    rebuild_memory_index_in(&mem_dir, &remaining)?;
+    Ok(DeleteMemoryOutcome { deleted_file: fname })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -804,6 +978,144 @@ mod tests {
             source_pending_file: None, created_at: Utc::now(), reviewed_at: None,
             blocked_hits: vec![],
         }
+    }
+
+    // ── P3 刪除記憶（delete_memory_file）─────────────────────────────
+    // 安全負例為本組重點：任何「身分確認不了」的情況都必須 fail-closed、不刪檔。
+
+    /// 建一個假 vault，回傳 root。`tier_files`：(層目錄相對路徑, 檔名, 內容)
+    fn del_vault(files: &[(&str, &str, &str)]) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!("amagi-del-{}", uuid::Uuid::new_v4()));
+        for (dir, name, body) in files {
+            let d = root.join(dir);
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join(name), body).unwrap();
+        }
+        root
+    }
+
+    /// 合法受管記憶檔內容（frontmatter 需 id/title/category/created 齊備）
+    fn mem_file(id: &str, title: &str, body: &str) -> String {
+        format!("---\nid: {id}\ntitle: \"{title}\"\ncategory: agent_note\ncreated: 2026-08-17\n---\n\n{body}\n")
+    }
+
+    #[test]
+    fn test_delete_memory_project_shared_general_all_tiers() {
+        // 三層各一筆，逐層刪除後：源檔消失、MEMORY.md 由剩餘權威集重建
+        let id_p = "aaaaaaaa-1111-4111-8111-111111111111";
+        let id_s = "bbbbbbbb-2222-4222-8222-222222222222";
+        let id_g = "cccccccc-3333-4333-8333-333333333333";
+        let root = del_vault(&[
+            ("projects/demo/agent/memory", "專案筆記-aaaaaaaa.md", &mem_file(id_p, "專案筆記", "內容 P")),
+            ("shared/agent/memory", "共用筆記-bbbbbbbb.md", &mem_file(id_s, "共用筆記", "內容 S")),
+            ("general/agent/memory", "全域筆記-cccccccc.md", &mem_file(id_g, "全域筆記", "內容 G")),
+        ]);
+
+        let out = delete_memory_file(&root, &SyncScope::Project, Some("projects/demo"), id_p).unwrap();
+        assert_eq!(out.deleted_file, "專案筆記-aaaaaaaa.md");
+        assert!(!root.join("projects/demo/agent/memory/專案筆記-aaaaaaaa.md").exists());
+        let idx = std::fs::read_to_string(root.join("projects/demo/agent/memory/MEMORY.md")).unwrap();
+        assert!(!idx.contains("專案筆記"), "索引須反映已刪除，實得：{idx}");
+
+        delete_memory_file(&root, &SyncScope::Shared, None, id_s).unwrap();
+        assert!(!root.join("shared/agent/memory/共用筆記-bbbbbbbb.md").exists());
+
+        delete_memory_file(&root, &SyncScope::Global, None, id_g).unwrap();
+        assert!(!root.join("general/agent/memory/全域筆記-cccccccc.md").exists());
+        assert!(root.join("general/agent/memory/MEMORY.md").is_file(), "空集合仍須寫出空索引");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_delete_memory_unknown_id_deletes_nothing() {
+        let id = "aaaaaaaa-1111-4111-8111-111111111111";
+        let root = del_vault(&[
+            ("shared/agent/memory", "在場筆記-aaaaaaaa.md", &mem_file(id, "在場筆記", "內容")),
+        ]);
+        let err = delete_memory_file(&root, &SyncScope::Shared, None, "zzzzzzzz-9999-4999-8999-999999999999");
+        assert!(err.is_err(), "不存在的 id 應回 Err");
+        assert!(root.join("shared/agent/memory/在場筆記-aaaaaaaa.md").is_file(),
+            "既有記憶不得被誤刪");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_delete_memory_same_id_two_files_fails_closed() {
+        // 同 frontmatter id、不同 title → 兩個不同檔名皆通過受管檔名守門 → 命中 2 筆。
+        // 絕不可猜刪哪一筆。
+        let id = "aaaaaaaa-1111-4111-8111-111111111111";
+        let root = del_vault(&[
+            ("shared/agent/memory", "甲-aaaaaaaa.md", &mem_file(id, "甲", "內容甲")),
+            ("shared/agent/memory", "乙-aaaaaaaa.md", &mem_file(id, "乙", "內容乙")),
+        ]);
+        let err = delete_memory_file(&root, &SyncScope::Shared, None, id).unwrap_err();
+        let msg = format!("{err:?}");
+        assert!(msg.contains("命中") && msg.contains("消歧"), "應要求人工消歧，實得 {msg}");
+        assert!(root.join("shared/agent/memory/甲-aaaaaaaa.md").is_file(), "兩檔皆不得被刪");
+        assert!(root.join("shared/agent/memory/乙-aaaaaaaa.md").is_file(), "兩檔皆不得被刪");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_delete_memory_unconfirmable_identity_fails_closed() {
+        // 檔名 idfrag 與目標相符，但 frontmatter 壞掉（缺 category）→ 身分無法確認。
+        // 不可當成「該檔不是目標」而放過去刪別的，也不可誤刪它。
+        let id = "aaaaaaaa-1111-4111-8111-111111111111";
+        let root = del_vault(&[
+            ("shared/agent/memory", "壞檔-aaaaaaaa.md",
+             "---\nid: aaaaaaaa-1111-4111-8111-111111111111\ntitle: \"壞檔\"\ncreated: 2026-08-17\n---\n\n無 category\n"),
+        ]);
+        let err = delete_memory_file(&root, &SyncScope::Shared, None, id).unwrap_err();
+        let msg = format!("{err:?}");
+        assert!(msg.contains("無法確認"), "應以身分無法確認中止，實得 {msg}");
+        assert!(root.join("shared/agent/memory/壞檔-aaaaaaaa.md").is_file(), "不得刪除身分未確認的檔");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_delete_memory_non_regular_file_fails_closed() {
+        // 目標名稱是「目錄」而非一般檔（symlink 的可測代理，Windows 建 symlink 需特權）
+        let id = "aaaaaaaa-1111-4111-8111-111111111111";
+        let root = std::env::temp_dir().join(format!("amagi-del-{}", uuid::Uuid::new_v4()));
+        let mem = root.join("shared/agent/memory");
+        std::fs::create_dir_all(mem.join("假檔-aaaaaaaa.md")).unwrap();
+        let err = delete_memory_file(&root, &SyncScope::Shared, None, id).unwrap_err();
+        let msg = format!("{err:?}");
+        assert!(msg.contains("一般檔"), "非一般檔應被擋，實得 {msg}");
+        assert!(mem.join("假檔-aaaaaaaa.md").is_dir(), "不得動非一般檔");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_delete_memory_rejects_unsafe_vault_folder() {
+        // 路徑逃逸：vault_folder 不合法（非 projects/ 開頭、含 ..）一律拒絕
+        let root = del_vault(&[("shared/agent/memory", "x-aaaaaaaa.md", &mem_file("a", "x", "y"))]);
+        for bad in ["../escape", "projects/../../etc", "notprojects/demo"] {
+            let err = delete_memory_file(&root, &SyncScope::Project, Some(bad), "whatever");
+            assert!(err.is_err(), "不安全的 vault_folder「{bad}」須被拒絕");
+        }
+        // Project scope 未給 vault_folder 也須拒絕（不得退化成掃任意目錄）
+        assert!(delete_memory_file(&root, &SyncScope::Project, None, "whatever").is_err());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_delete_memory_untouched_neighbours_survive() {
+        // 只刪目標那筆，同層其他記憶與索引其餘條目不受影響
+        let id_a = "aaaaaaaa-1111-4111-8111-111111111111";
+        let id_b = "bbbbbbbb-2222-4222-8222-222222222222";
+        let root = del_vault(&[
+            ("shared/agent/memory", "要刪的-aaaaaaaa.md", &mem_file(id_a, "要刪的", "內容 A")),
+            ("shared/agent/memory", "要留的-bbbbbbbb.md", &mem_file(id_b, "要留的", "內容 B")),
+        ]);
+        delete_memory_file(&root, &SyncScope::Shared, None, id_a).unwrap();
+        assert!(!root.join("shared/agent/memory/要刪的-aaaaaaaa.md").exists());
+        assert!(root.join("shared/agent/memory/要留的-bbbbbbbb.md").is_file());
+        let idx = std::fs::read_to_string(root.join("shared/agent/memory/MEMORY.md")).unwrap();
+        assert!(idx.contains("要留的"), "剩餘記憶須仍在索引，實得：{idx}");
+        assert!(!idx.contains("要刪的"), "已刪記憶不得留在索引");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

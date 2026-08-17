@@ -36,7 +36,20 @@ export interface LearnResult {
   blockedCount: number
   /** .amagi/pending/ 撈到的 Agent 技能草稿數（與封鎖無關） */
   pendingSkillCount: number
+  /** .amagi/pending/ 撈到的 Agent 記憶草稿數（P1 記憶投遞通道） */
+  pendingMemoryCount: number
+  /** 被安全過濾擋下、未入列的 pending 投遞檔（N3；原本只印 stderr、UI 無感） */
+  pendingSkipped: PendingSkipped[]
   candidateIds: string[]
+}
+
+/** 被安全過濾擋下的 pending 投遞檔摘要：僅檔名／通道／規則名稱，不含命中值 */
+export interface PendingSkipped {
+  fileName: string
+  /** 通道類型人話名稱（「技能」／「記憶」） */
+  kind: string
+  /** 命中的安全規則名稱，不含命中值 */
+  labels: string[]
 }
 
 export type ReviewItemType = 'memory' | 'skill' | 'blocked' | 'wiki'
@@ -259,6 +272,26 @@ export interface PromoteResult {
   warnings: string[]
 }
 
+/** 刪除記憶的二段確認預覽（P3） */
+export interface MemoryDeletionPreview {
+  fileName: string
+  title: string
+  /** 在 vault 內的相對路徑 */
+  relativePath: string
+  /** 全域層（general）——blast radius 最大，UI 須加強警示 */
+  isGlobal: boolean
+  /** git 復原性人話說明 */
+  gitNote: string
+  /** 保守判斷：僅在「是 git repo 且該檔無未提交變更」時為 true */
+  recoverableByGit: boolean
+}
+
+export interface DeleteMemoryResult {
+  deletedFile: string
+  /** 非空＝vault 已刪但衍生物未完全刷新；UI 不可顯示為單純成功 */
+  warnings: string[]
+}
+
 export interface WikiIngestInput {
   projectId: string
   layer: string
@@ -325,6 +358,14 @@ export const api = {
   /** vault-first（Phase 3）：把一筆專案層記憶升級為跨專案共用（純 vault 檔案操作，以 vault id 定位）。 */
   promoteMemory: (projectId: string, memoryId: string) =>
     invoke<PromoteResult>('promote_memory', { projectId, memoryId }),
+
+  /** 刪除前預覽（走與刪除相同的安全閘）：待刪檔身分 ＋ git 可復原性 */
+  previewMemoryDeletion: (scope: SyncScope, projectId: string | null, memoryId: string) =>
+    invoke<MemoryDeletionPreview>('preview_memory_deletion', { scope, projectId, memoryId }),
+
+  /** 刪除一筆 vault 記憶（vault 檔即真相，不做軟刪除）。須先經二段確認 */
+  deleteMemory: (scope: SyncScope, projectId: string | null, memoryId: string) =>
+    invoke<DeleteMemoryResult>('delete_memory', { scope, projectId, memoryId }),
 
   // ── 差異匯出 ──────────────────────────────────────
   listChangedFiles: (projectId: string) => invoke<ChangedFile[]>('list_changed_files', { projectId }),

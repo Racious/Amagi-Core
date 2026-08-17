@@ -44,6 +44,39 @@ pub fn is_git_work_tree(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// 單一檔案相對於 vault git 的提交狀態（P3 刪除前的復原性判斷用）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileCommitState {
+    /// 未被 git 追蹤：刪除後無從復原
+    Untracked,
+    /// 已追蹤但與 HEAD 有差異：git 只能復原到上一版
+    Modified,
+    /// 已追蹤且與 HEAD 一致：可從 git 歷史完整復原
+    Committed,
+}
+
+/// 查單一路徑的提交狀態。
+///
+/// **刻意不解析 `git status` 輸出**：git 預設 `core.quotepath=true` 會把非 ASCII 檔名
+/// 轉義成八進位並加引號（例 `"…/\345\245\227\345\233\236….md"`），而記憶檔名幾乎必然
+/// 含中文 → 以原始 UTF-8 路徑做字串比對會**永遠不命中**，把未提交的新檔誤判為「已提交、
+/// 可復原」，正好與「保守判斷」的要求相反（2026-08-17 實機驗證抓到，自動化測試未覆蓋）。
+/// 改為直接對該路徑發問，讓 git 自己處理路徑編碼。
+pub fn file_commit_state(vault_root: &Path, rel_path: &str) -> Result<FileCommitState, AppError> {
+    // 是否被追蹤：ls-files --error-unmatch 對未追蹤路徑回非零
+    let tracked = run_git_capture(vault_root, &["ls-files", "--error-unmatch", "--", rel_path])?;
+    if !tracked.ok {
+        return Ok(FileCommitState::Untracked);
+    }
+    // 與 HEAD 是否一致：diff --quiet 相同回 0、有差異回 1
+    let diff = run_git_capture(vault_root, &["diff", "--quiet", "HEAD", "--", rel_path])?;
+    if diff.ok {
+        Ok(FileCommitState::Committed)
+    } else {
+        Ok(FileCommitState::Modified)
+    }
+}
+
 /// 執行 git，非零即拋（沿用原介面，適合不需分類失敗原因的呼叫）。
 fn run_git(vault_root: &Path, args: &[&str]) -> Result<String, AppError> {
     let out = run_git_capture(vault_root, args)?;
@@ -578,6 +611,45 @@ mod tests {
             p.display()
         );
         assert!(!is_rebase_in_progress(&wt));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// (i) file_commit_state 三態——**檔名刻意含中文**：
+    /// 這是 2026-08-17 實機驗證抓到的 bug 的迴歸測試。原實作解析 `git status --porcelain`
+    /// 字串比對路徑，但 core.quotepath 預設把非 ASCII 檔名轉義成八進位並加引號，
+    /// 導致中文檔名永遠不命中 → 未提交的新檔被誤判為「已提交、可從 git 復原」。
+    #[test]
+    fn test_file_commit_state_three_states_with_cjk_filename() {
+        let (root, a, _b) = setup_two_clones("commitstate");
+        let cjk = "shared/agent/memory/測試記憶-中文檔名-abcd1234.md";
+
+        // ① 未追蹤：剛寫出、尚未 add
+        write(&a, cjk, "---\ntitle: 測試\n---\n內容\n");
+        assert_eq!(file_commit_state(&a, cjk).unwrap(), FileCommitState::Untracked,
+            "新寫入且未 add 的中文檔名須判為 Untracked（原 bug 誤判為已提交）");
+
+        // ② 已提交且乾淨
+        git(&a, &["add", "-A"]);
+        git(&a, &["commit", "-m", "add cjk memory"]);
+        assert_eq!(file_commit_state(&a, cjk).unwrap(), FileCommitState::Committed);
+
+        // ③ 已追蹤但有未提交變更
+        write(&a, cjk, "---\ntitle: 測試\n---\n改過的內容\n");
+        assert_eq!(file_commit_state(&a, cjk).unwrap(), FileCommitState::Modified);
+
+        // 對照：純 ASCII 檔名三態亦正確（確保修法沒有只對中文生效）
+        let ascii = "shared/agent/memory/ascii-memo-beef5678.md";
+        write(&a, ascii, "x\n");
+        assert_eq!(file_commit_state(&a, ascii).unwrap(), FileCommitState::Untracked);
+        git(&a, &["add", "-A"]);
+        git(&a, &["commit", "-m", "add ascii"]);
+        assert_eq!(file_commit_state(&a, ascii).unwrap(), FileCommitState::Committed);
+
+        // 完全不存在的路徑：視為未追蹤（保守，不宣稱可復原）
+        assert_eq!(
+            file_commit_state(&a, "shared/agent/memory/不存在-00000000.md").unwrap(),
+            FileCommitState::Untracked);
+
         let _ = fs::remove_dir_all(&root);
     }
 }

@@ -133,10 +133,12 @@ pub fn init_project(project: &Project, vault_root: Option<&Path>) -> Result<Init
         created_files.push(config_path.to_string_lossy().to_string());
     }
 
-    // ── 寫入 Agent 技能記錄指引 ───────────────────────
+    // ── 寫入 Agent 投遞指引（技能＋記憶雙通道）─────────
+    // 註：既有檔案不覆寫（尊重使用者自訂）→ **既有專案不會自動拿到記憶通道說明**，
+    // 需手動更新或刪檔重 init。更新策略為產品決策，未納入本輪。
     let agent_guide_path = base.join("pending").join("AGENT_INSTRUCTIONS.md");
     if !agent_guide_path.exists() {
-        let guide = AGENT_SKILL_INSTRUCTIONS;
+        let guide = AGENT_PENDING_INSTRUCTIONS;
         std::fs::write(&agent_guide_path, guide)
             .map_err(|e| AppError::Io(e.to_string()))?;
         created_files.push(agent_guide_path.to_string_lossy().to_string());
@@ -309,19 +311,92 @@ fn build_project_index_md(name: &str) -> String {
     )
 }
 
-// ── Agent 技能記錄格式說明（寫入 .amagi/pending/AGENT_INSTRUCTIONS.md）──
+// ── Agent 投遞格式說明（寫入 .amagi/pending/AGENT_INSTRUCTIONS.md）──
+// 涵蓋技能與記憶雙通道（P1，2026-08-17）：原僅技能，AI 無記憶投遞入口 → vault 記憶區長期為空。
+// 內容須與 `pending_scanner::{SKILL_KIND, MEMORY_KIND}` 的檔名前綴與 frontmatter 解析一致。
 
-const AGENT_SKILL_INSTRUCTIONS: &str = r#"# AMAGI 技能記錄指引
+const AGENT_PENDING_INSTRUCTIONS: &str = r#"# AMAGI 投遞指引（技能 ＋ 記憶）
 
-當你（Codex 或 Claude）完成一項**有意義、可重複**的任務後，
-請在這個目錄建立一個技能草稿，讓 AMAGI 整合進技能庫。
+這個目錄是 **AI → AMAGI Core** 的投遞口。你（Codex 或 Claude）在此建立草稿，
+AMAGI 會在使用者按下「學習變更」時掃入審核佇列，經使用者核可後寫入 vault 知識庫。
 
-## 檔名規則
-skill-<任務類型>.md
-例如：skill-add-api-endpoint.md、skill-fix-typescript-types.md
+兩種投遞類型，**依檔名前綴區分**：
 
-## 檔案格式
+| 前綴 | 用途 | 例 |
+|---|---|---|
+| `skill-` | 可重複執行的**做法／流程** | `skill-add-api-endpoint.md` |
+| `memory-` | 值得長期記住的**事實／踩坑／限制** | `memory-ps51-bom-trap.md` |
+
+> 兩者都會經過安全過濾。含 token、密碼、金鑰等敏感內容的檔案**不會入列**，
+> 但會在學習結果中列出檔名與命中規則，請修正後再次學習。
+
+---
+
+## 何時投遞
+
+**任務收尾的 after-task-review 階段**——這是最自然的時機。剛做完一件事，你才知道：
+
+- 哪個坑會再踩一次 → 投 `memory-`
+- 哪個流程下次還會走一遍 → 投 `skill-`
+
+不必每個任務都投。**沒有可重複價值的就別投**，噪音比空白更糟。
+
+---
+
+## 記憶投遞：`memory-<主題>.md`
+
+### 格式
+
+```markdown
+---
+title: PS5.1 寫 JSON 帶 BOM 會讓 app 靜默清空資料
+category: gotcha
+scope: shared
+---
+
+PowerShell 5.1 的 `Out-File -Encoding utf8` 會寫入 BOM，serde 解析失敗後
+`read_or_default` 靜默回傳預設值 → 使用者資料被清空且無錯誤訊息。
+
+寫 app 要讀的 JSON 一律用 `[System.IO.File]::WriteAllText()`（無 BOM）。
 ```
+
+### 欄位
+
+| 欄位 | 必要 | 說明 |
+|---|:--:|---|
+| `title` | 建議 | 一句話講完那件事。留空會 fallback 成檔名（可讀性差，請自己寫） |
+| `category` | 選填 | 自由分類字串，如 `gotcha`／`workflow`／`constraint`／`decision`。未給則為 `agent_note` |
+| `scope` | 選填 | `project`（預設）／`shared`／`global`。**不確定就用 project** |
+
+正文即記憶內容。**寫給未來的 AI 看**：講清楚現象、原因、正解，而不是「這裡要注意」。
+
+### scope 怎麼選
+
+| scope | 落點 | 用在什麼記憶 |
+|---|---|---|
+| `project` | `projects/<專案>/agent/memory` | 只有這個專案成立的事（預設，最安全） |
+| `shared` | `shared/agent/memory` | 跨專案通用的技術踩坑、工具行為 |
+| `global` | `general/agent/memory` | **每次對話都會載入**：使用者偏好、通用紀律 |
+
+⚠ **`global` 請節制**。它會進使用者的全域 `CLAUDE.md`／`AGENTS.md` 錨點，
+所有專案的所有 AI 每次對話都讀到。錯的全域記憶不只是一個檔案錯，
+是**已經污染了後續每一次判斷**。不確定時投 `project`，使用者可在 UI 升級。
+
+### 寫得好 vs 寫不好
+
+| 沒有資訊量 | 未來的 AI 用得上 |
+|---|---|
+| 「注意 JSON 編碼問題」 | 「PS5.1 `Out-File -Encoding utf8` 帶 BOM → serde 失敗 → `read_or_default` 靜默清空資料；改用 `WriteAllText`」 |
+| 「記得跑測試」 | 「`cargo test` 綠不代表新行為被測到——UI 改動一律走實機驗證」 |
+| 「git 要小心」 | 「`pull --rebase --autostash` 套回衝突時 exit 0 卻留 UU 標記；成功路徑也必須查 unmerged」 |
+
+---
+
+## 技能投遞：`skill-<任務類型>.md`
+
+### 格式
+
+```markdown
 ---
 title: 技能的簡短名稱
 scope: project
@@ -331,35 +406,44 @@ scope: project
 這個技能解決什麼問題、適用於什麼情境。
 
 ## 何時使用
-列出會用到這個技能的情境或觸發關鍵字（例：新增 API、修 TypeScript 型別）。
-這段讓未來的 AI 知道何時該套用此技能，請務必填寫。
+會用到的情境或觸發關鍵字（例：新增 API、修 TypeScript 型別）。
+這段讓未來的 AI 知道何時該套用，請務必填寫。
 
 ## 步驟
 1. 第一步
 2. 第二步
-3. ...
 
 ## 注意事項
 - 這個專案特有的注意點
 - 常見錯誤或陷阱
 ```
 
-## scope 說明
-- 技能經審核後一律收進 vault `_skills/`（單一來源）；是否分發到 `.codex`/`.claude`、
-  及範圍（本專案或全域）由 Skills 頁選擇性分發決定。
-- `project`：傾向只在這個專案使用（預設）
-- `global`：傾向所有專案通用
+### scope 說明
 
-## 什麼情況適合建立技能
+技能經審核後一律收進 vault `_skills/`（單一來源）；是否分發到 `.codex`/`.claude`
+由 Skills 頁決定。`scope` 表達傾向：`project`（預設）或 `global`（所有專案通用）。
+
+### 什麼情況適合建立技能
+
 - 完成了一個之前沒有標準流程的任務
 - 發現了這個專案特有的最佳實踐
 - 解決了一個需要特定步驟的問題
-- 建立了一個可重複使用的工作流程
 
-## 什麼情況不需要建立技能
+### 什麼情況不需要
+
 - 簡單的一次性修改
 - 已有對應技能的任務
-- 含有敏感資訊（token、密碼等）的內容
+
+---
+
+## 投遞後會發生什麼
+
+1. 使用者按「學習變更」→ 你的檔案被掃入審核佇列
+2. 審核頁可**編輯內容、改 scope**後才核可（你寫的不是最終版，使用者是最後一關）
+3. 核可 → 同步 → 寫入 vault，索引與 `CLAUDE.md`／`AGENTS.md` 內聯自動重建
+4. 你的原始檔移入 `.amagi/history/` 歸檔（不會重複入列）
+
+被安全過濾擋下的檔案**留在原處**，每次學習都會再提醒一次，直到你修好或刪掉。
 "#;
 
 // ── workflow-state.md 初始模板（任務狀態檔）──────────────────────
