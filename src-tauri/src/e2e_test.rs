@@ -733,6 +733,13 @@ fn e2e_doc_router_routes_by_type_through_real_vault_config() {
     assert_eq!(r2.decision.bucket, "reports");
     assert!(vault_root.join(&r2.destination).is_file());
 
+    // review-brief → 同屬 reports 桶且不是未知 type fallback
+    let review_brief = "---\ntitle: 某審查交辦\ntype: review-brief\n---\nx";
+    let r2b = doc_router::route_document(&vault_root, Some(&pf), review_brief, None).unwrap();
+    assert_eq!(r2b.decision.bucket, "reports");
+    assert!(!r2b.decision.is_fallback);
+    assert!(vault_root.join(&r2b.destination).is_file());
+
     // handoff → 專案交接活頁 handoff.md（需專案、檔名固定、覆寫式快照）
     let handoff = "---\ntitle: 交接\ntype: handoff\n---\nx";
     let r3 = doc_router::route_document(&vault_root, Some(&pf), handoff, Some("ignored.md")).unwrap();

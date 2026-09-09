@@ -14,7 +14,7 @@ pub struct WikiWriteResult {
 /// 路徑規則：
 /// - `sync_targets[0]` = 目標層（"general" / "shared" / "projects/<name>"）
 /// - 專案層 → `<vault>/<layer>/<bucket>/<slug>.md`，bucket 由 `doc_router::bucket_for_type`
-///   依 `type` 決定（knowledge / reports；`handoff`（交接活頁）防禦性落回 knowledge）
+///   依 `type` 決定（knowledge / reports，後者含 review 三檔；`handoff`（交接活頁）防禦性落回 knowledge）
 /// - general / shared → `<vault>/<layer>/<slug>.md`（扁平，不用 pages/ 子層）
 ///
 /// 非破壞：目標檔已存在則略過，不覆寫既有手做內容（D7）。
@@ -182,14 +182,26 @@ mod tests {
     }
 
     #[test]
-    fn test_write_review_type_to_reports_bucket() {
-        // 2e-後續：test-report/review 類 → reports 桶（複用 doc_router 桶映射）
+    fn test_write_review_types_to_reports_bucket() {
+        // 2e-後續：test-report/review 三檔類型 → reports 桶（複用 doc_router 桶映射）
         let dir = std::env::temp_dir().join(format!("amagi-wiki-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
-        let it = wiki_item("某次審查", "review", "projects/foo", "x");
-        write_wiki_pages(&dir, std::slice::from_ref(&it)).unwrap();
-        assert!(dir.join("projects/foo/reports/某次審查.md").exists(), "review → reports 桶");
-        assert!(!dir.join("projects/foo/knowledge/某次審查.md").exists());
+        for (title, doc_type) in [
+            ("某次審查", "review"),
+            ("某次交辦", "review-brief"),
+            ("某次裁決", "review-resolution"),
+        ] {
+            let it = wiki_item(title, doc_type, "projects/foo", "x");
+            write_wiki_pages(&dir, std::slice::from_ref(&it)).unwrap();
+            assert!(
+                dir.join(format!("projects/foo/reports/{title}.md"))
+                    .exists(),
+                "{doc_type} → reports 桶"
+            );
+            assert!(!dir
+                .join(format!("projects/foo/knowledge/{title}.md"))
+                .exists());
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -291,7 +291,7 @@ fn build_project_index_md(name: &str) -> String {
 | 桶 | 目錄 | 裝什麼 |
 |------|------|------|
 | 知識 | [knowledge/](knowledge/) | 人看、可發布 docs/（`type`: adr/spec/business/concept/troubleshooting）|
-| 報告 | [reports/](reports/) | 稽核紀錄（`type`: test-report/review）|
+| 報告 | [reports/](reports/) | 稽核紀錄（`type`: test-report/review/review-brief/review-resolution）|
 | 交接 | [handoff.md](handoff.md) | 當前狀態活頁（`type`: handoff；覆寫式快照、單一真實來源）|
 | AI 私有 | agent/ | 長期記憶、指針（按需建立）|
 

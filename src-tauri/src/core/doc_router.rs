@@ -3,7 +3,7 @@
 //!
 //! 落點對照（amagi-conventions §5；三桶結構見 adr-004 D3）：
 //! `adr`/`spec`/`business`/`concept`/`troubleshooting` → `<專案>/knowledge/`；
-//! `test-report`/`review` → `<專案>/reports/`；
+//! `test-report`/`review`/`review-brief`/`review-resolution` → `<專案>/reports/`；
 //! `handoff` → `<專案>/handoff.md`（各專案一份交接活頁，檔名固定、覆寫式快照，需專案）；
 //! 其餘（未知/缺 type）→ `<專案>/knowledge/`（兜底，標記 fallback）。
 //! daily/ 不再由路由器自動落點：純為每日 Session 流水，由 Wiki End 手寫，
@@ -87,7 +87,7 @@ pub fn parse_frontmatter(content: &str) -> ParsedFrontMatter {
 pub fn bucket_for_type(doc_type: &str) -> (&'static str, bool) {
     match doc_type {
         "adr" | "spec" | "business" | "concept" | "troubleshooting" => ("knowledge", false),
-        "test-report" | "review" => ("reports", false),
+        "test-report" | "review" | "review-brief" | "review-resolution" => ("reports", false),
         "handoff" => ("handoff", false),
         _ => ("knowledge", true),
     }
@@ -413,6 +413,8 @@ mod tests {
         assert_eq!(bucket_for_type("troubleshooting"), ("knowledge", false));
         assert_eq!(bucket_for_type("test-report"), ("reports", false));
         assert_eq!(bucket_for_type("review"), ("reports", false));
+        assert_eq!(bucket_for_type("review-brief"), ("reports", false));
+        assert_eq!(bucket_for_type("review-resolution"), ("reports", false));
         assert_eq!(bucket_for_type("handoff"), ("handoff", false));
     }
 
@@ -431,6 +433,17 @@ mod tests {
 
         let d = route_decision("review", Some("projects/amagi-core")).unwrap();
         assert_eq!(d.dir_relative, "projects/amagi-core/reports");
+
+        let d = route_decision(" Review-Brief ", Some("projects/amagi-core")).unwrap();
+        assert_eq!(d.doc_type, "review-brief");
+        assert_eq!(d.bucket, "reports");
+        assert_eq!(d.dir_relative, "projects/amagi-core/reports");
+        assert!(!d.is_fallback);
+
+        let d = route_decision("review-resolution", Some("projects/amagi-core")).unwrap();
+        assert_eq!(d.bucket, "reports");
+        assert_eq!(d.dir_relative, "projects/amagi-core/reports");
+        assert!(!d.is_fallback);
     }
 
     #[test]
@@ -452,7 +465,17 @@ mod tests {
     fn test_no_type_routes_to_daily() {
         // daily/ 純為每日 Session 流水（手寫、多專案以 section 分隔），
         // 任何 type 都不應再被路由器落到 daily（含 handoff、未知 type 兜底）。
-        for ty in ["adr", "spec", "review", "test-report", "handoff", "亂填", ""] {
+        for ty in [
+            "adr",
+            "spec",
+            "review",
+            "review-brief",
+            "review-resolution",
+            "test-report",
+            "handoff",
+            "亂填",
+            "",
+        ] {
             let d = route_decision(ty, Some("projects/x")).unwrap();
             assert_ne!(d.bucket, "daily", "type「{ty}」不應落 daily 桶");
             assert!(
