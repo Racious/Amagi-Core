@@ -15,7 +15,7 @@ pub fn build_vault_pointer_block(vault_folder: &str, for_codex: bool, memory_bul
         "<!-- AMAGI-VAULT-PROJECT:BEGIN (Amagi Core 管理，勿手改) -->".to_string(),
         "## 知識庫指針".to_string(),
         format!("本專案知識庫：vault `{}/`（邏輯位置，非絕對路徑）。", vault_folder),
-        "- 接任務前**先讀該處 `handoff.md`（當前狀態活頁，最新進度）**，再讀 `index.md`、`knowledge/`、近期 `reports/` 恢復脈絡。".to_string(),
+        "- 接任務前**先讀該處 `handoff.md`（當前狀態活頁，最新進度）**；其餘依任務從 `index.md` 定位，僅在背景不足時讀對應 `knowledge/` 或 `reports/` 檔，不整批載入。".to_string(),
         format!("- vault 根的本機路徑見全局指針（`{}` 的 AMAGI-VAULT 區塊）。", anchor),
         "- 產出規範/決策/規格/報告一律寫入該 vault 路徑（依 type 分流），不寫絕對機器路徑。".to_string(),
         String::new(),
