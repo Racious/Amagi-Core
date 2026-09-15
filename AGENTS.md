@@ -5,7 +5,7 @@
 <!-- AMAGI-VAULT-PROJECT:BEGIN (Amagi Core 管理，勿手改) -->
 ## 知識庫指針
 本專案知識庫：vault `projects/amagi-core/`（邏輯位置，非絕對路徑）。
-- 接任務前**先讀該處 `handoff.md`（當前狀態活頁，最新進度）**，再讀 `index.md`、`knowledge/`、近期 `reports/` 恢復脈絡。
+- 接任務前**先讀該處 `handoff.md`（當前狀態活頁，最新進度）**；其餘依任務從 `index.md` 定位，僅在背景不足時讀對應 `knowledge/` 或 `reports/` 檔，不整批載入。
 - vault 根的本機路徑見全局指針（`~/.codex/AGENTS.md` 的 AMAGI-VAULT 區塊）。
 - 產出規範/決策/規格/報告一律寫入該 vault 路徑（依 type 分流），不寫絕對機器路徑。
 
